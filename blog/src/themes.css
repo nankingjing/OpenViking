@@ -143,7 +143,8 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 .b-topbar { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--th-bg) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--th-line); }
 .b-topbar__inner { max-width: 1280px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; gap: 24px; }
 .b-brand { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
-.b-brand__mark { width: 26px; height: 26px; border-radius: 4px; object-fit: cover; }
+.b-brand__mark { width: 26px; height: 26px; border-radius: 4px; object-fit: cover; transition: filter 0.3s; }
+[data-theme="kami"] .b-brand__mark { filter: invert(1); }
 .b-brand__name { font-family: var(--th-font-display); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
 .b-brand__sub { font-family: var(--th-font-mono); font-size: 11px; letter-spacing: 0.1em; color: var(--th-mute); margin-left: 4px; }
 .b-topbar__nav { margin-left: auto; display: flex; align-items: center; gap: 8px; }
