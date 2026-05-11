@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   BlogContext, pickLocale, ReadingProgress, TOC,
   getAllPosts, getAllTags, getPostBySlug, neighbors,
 } from './blog-components';
 import {
   LANGS, THEME_LIGHT, THEME_DARK,
-  useHashRouter, useShellStrings, makeFormatDate, applyTheme, getInitialTheme, isDark,
+  useSiteRouter, useShellStrings, makeFormatDate, applyTheme, getInitialTheme, isDark,
+  buildPath, postPath,
 } from './shell-core';
 
 /* ---------- topbar ---------- */
@@ -15,11 +16,11 @@ function Topbar({ lang, theme, onLang, onToggleTheme, onHome, S }) {
   return (
     <header className="b-topbar">
       <div className="b-topbar__inner">
-        <div className="b-brand" onClick={onHome} role="button" tabIndex={0}>
-          <img className="b-brand__mark" src="assets/logo.png" alt="OpenViking" />
+        <a className="b-brand" href="/" onClick={(e) => { e.preventDefault(); onHome(); }}>
+          <img className="b-brand__mark" src="/assets/logo.png" alt="OpenViking" />
           <span className="b-brand__name">{S.siteName}</span>
           <span className="b-brand__sub">// {S.siteSub}</span>
-        </div>
+        </a>
         <div className="b-topbar__nav">
           <div className="b-seg" role="tablist" aria-label={S.langLabel}>
             {LANGS.map(l => (
@@ -52,7 +53,7 @@ function Topbar({ lang, theme, onLang, onToggleTheme, onHome, S }) {
 
 /* ---------- index hero + list ---------- */
 
-function IndexView({ lang, t, theme, navigate, S, formatDate }) {
+export function IndexView({ lang, t, theme, navigate, S, formatDate }) {
   const all = useMemo(() => getAllPosts(), []);
   const tags = useMemo(() => getAllTags(), []);
   const [filter, setFilter] = useState('all');
@@ -107,10 +108,13 @@ function PostCard({ post, lang, navigate, S, formatDate, featured }) {
   const excerpt = pickLocale(m.description, lang);
   const cover = m.cover;
   const author = (m.authors || [])[0];
-  const open = () => navigate(`#/post/${post.id}`);
+  const href = postPath(post.id);
+  const open = (e) => {
+    e.preventDefault();
+    navigate(href);
+  };
   return (
-    <article className={`b-card ${featured ? 'b-card--featured' : ''}`} onClick={open} role="button" tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') open(); }}>
+    <a className={`b-card ${featured ? 'b-card--featured' : ''}`} href={href} onClick={open}>
       {cover ? <div className="b-card__cover"><img src={cover} alt="" /></div> : null}
       <div className="b-card__body">
         <div className="b-card__meta">
@@ -134,13 +138,13 @@ function PostCard({ post, lang, navigate, S, formatDate, featured }) {
           ) : null}
         </div>
       </div>
-    </article>
+    </a>
   );
 }
 
 /* ---------- post view ---------- */
 
-function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
+export function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
   const post = getPostBySlug(slug);
   if (!post) return <NotFound S={S} navigate={navigate} />;
   const m = post.meta;
@@ -171,7 +175,7 @@ function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
 
       <header className="b-post__head">
         <div className="b-post__eyebrow">
-          <a className="b-a" href="#/" onClick={(e) => { e.preventDefault(); navigate('#/'); }}>{S.backToIndex}</a>
+          <a className="b-a" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}>{S.backToIndex}</a>
           {m.category ? <span>· {pickLocale(m.category, lang)}</span> : null}
         </div>
         <h1 className="b-post__title">{pickLocale(m.title, effectiveLang)}</h1>
@@ -232,9 +236,10 @@ function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
 }
 
 function NavCard({ post, dir, lang, S, navigate }) {
+  const href = postPath(post.id);
   return (
-    <a className={`b-post__navcard b-post__navcard--${dir}`} href={`#/post/${post.id}`}
-       onClick={(e) => { e.preventDefault(); navigate(`#/post/${post.id}`); }}>
+    <a className={`b-post__navcard b-post__navcard--${dir}`} href={href}
+       onClick={(e) => { e.preventDefault(); navigate(href); }}>
       <div className="b-post__navcard__dir">{dir === 'prev' ? `← ${S.prev}` : `${S.next} →`}</div>
       <div className="b-post__navcard__title">{pickLocale(post.meta.title, lang)}</div>
     </a>
@@ -248,7 +253,7 @@ function NotFound({ S, navigate }) {
         <div className="b-hero__eyebrow">404</div>
         <h1 className="b-hero__title">{S.notFoundTitle}</h1>
         <p className="b-hero__lede">{S.notFoundBody}</p>
-        <a className="b-a" href="#/" onClick={(e) => { e.preventDefault(); navigate('#/'); }}>{S.backToIndex}</a>
+        <a className="b-a" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}>{S.backToIndex}</a>
       </section>
     </main>
   );
@@ -274,8 +279,22 @@ function Footer({ S }) {
 
 /* ---------- root app ---------- */
 
+export function BlogShell({ router, lang, theme, onLang = () => {}, onToggleTheme = () => {}, S, formatDate, t }) {
+  const onHome = () => router.navigate(buildPath({ name: 'index' }, router.query));
+
+  return (
+    <div className="b-shell">
+      <Topbar lang={lang} theme={theme} onLang={onLang} onToggleTheme={onToggleTheme} onHome={onHome} S={S} />
+      {router.route.name === 'index'
+        ? <IndexView lang={lang} t={t} theme={theme} navigate={router.navigate} S={S} formatDate={formatDate} />
+        : <PostView slug={router.route.slug} lang={lang} theme={theme} navigate={router.navigate} S={S} formatDate={formatDate} t={t} />}
+      <Footer S={S} />
+    </div>
+  );
+}
+
 export default function App() {
-  const router = useHashRouter();
+  const router = useSiteRouter();
   const initialLang = router.query.lang || localStorage.getItem('blog.lang') || 'en';
   const [lang, setLang] = useState(LANGS.some(l => l.code === initialLang) ? initialLang : 'en');
   const [theme, setTheme] = useState(getInitialTheme);
@@ -289,7 +308,6 @@ export default function App() {
 
   const onLang = (code) => { setLang(code); router.setQuery({ lang: code }); };
   const onToggleTheme = () => setTheme(t => t === THEME_LIGHT ? THEME_DARK : THEME_LIGHT);
-  const onHome = () => router.navigate('#/');
 
   useEffect(() => { window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' }); }, [router.route.name, router.route.slug]);
 
@@ -297,13 +315,5 @@ export default function App() {
   const formatDate = useMemo(() => makeFormatDate(lang), [lang]);
   const t = (m) => pickLocale(m, lang);
 
-  return (
-    <div className="b-shell">
-      <Topbar lang={lang} theme={theme} onLang={onLang} onToggleTheme={onToggleTheme} onHome={onHome} S={S} />
-      {router.route.name === 'index'
-        ? <IndexView lang={lang} t={t} theme={theme} navigate={router.navigate} S={S} formatDate={formatDate} />
-        : <PostView slug={router.route.slug} lang={lang} theme={theme} navigate={router.navigate} S={S} formatDate={formatDate} t={t} />}
-      <Footer S={S} />
-    </div>
-  );
+  return <BlogShell router={router} lang={lang} theme={theme} onLang={onLang} onToggleTheme={onToggleTheme} S={S} formatDate={formatDate} t={t} />;
 }

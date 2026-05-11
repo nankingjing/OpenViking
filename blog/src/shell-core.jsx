@@ -1,53 +1,98 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
-/* ---------- hash router ---------- */
+/* ---------- pathname router ---------- */
+
+function queryObject(queryPart = '') {
+  const search = new URLSearchParams(queryPart.replace(/^\?/, ''));
+  const query = {};
+  for (const [k, v] of search.entries()) query[k] = v;
+  return query;
+}
+
+export function parsePath(pathname = '/', search = '') {
+  const raw = pathname || '/';
+  const pathPart = raw.startsWith('/') ? raw : `/${raw}`;
+  const segs = pathPart.split('/').filter(Boolean);
+  const query = queryObject(search);
+  let route = { name: 'index' };
+  if (segs[0] === 'post' && segs[1]) route = { name: 'post', slug: segs[1] };
+  return { route, query, raw: `${pathPart}${search || ''}` };
+}
 
 export function parseHash(hash) {
   const raw = (hash || '').replace(/^#/, '') || '/';
   const [pathPart, queryPart = ''] = raw.split('?');
-  const segs = pathPart.split('/').filter(Boolean);
-  const query = {};
-  for (const kv of queryPart.split('&').filter(Boolean)) {
-    const [k, v = ''] = kv.split('=');
-    query[decodeURIComponent(k)] = decodeURIComponent(v);
-  }
-  let route = { name: 'index' };
-  if (segs[0] === 'post' && segs[1]) route = { name: 'post', slug: segs[1] };
-  return { route, query, raw };
+  return parsePath(pathPart || '/', queryPart ? `?${queryPart}` : '');
 }
 
-export function buildHash(route, query) {
+export function parseBrowserLocation(loc = window.location) {
+  if (loc.hash?.startsWith('#/')) return parseHash(loc.hash);
+  return parsePath(loc.pathname, loc.search);
+}
+
+export function buildPath(route, query = {}) {
   let path = '/';
-  if (route.name === 'post') path = `/post/${route.slug}`;
-  const qs = Object.entries(query)
-    .filter(([, v]) => v != null && v !== '')
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&');
-  return `#${path}${qs ? '?' + qs : ''}`;
+  if (route.name === 'post') path = `/post/${route.slug}/`;
+  const search = new URLSearchParams();
+  Object.entries(query || {}).forEach(([k, v]) => {
+    if (v != null && v !== '') search.set(k, v);
+  });
+  const qs = search.toString();
+  return `${path}${qs ? '?' + qs : ''}`;
 }
 
-export function useHashRouter() {
-  const [state, setState] = useState(() => parseHash(location.hash));
+export function postPath(slug, query) {
+  return buildPath({ name: 'post', slug }, query);
+}
+
+function parseHref(href, fallbackRoute) {
+  if (href.startsWith('#/')) return parseHash(href);
+  if (href.startsWith('/')) {
+    const url = new URL(href, window.location.origin);
+    return parsePath(url.pathname, url.search);
+  }
+  return { route: fallbackRoute || { name: 'index' }, query: {}, raw: href };
+}
+
+export function useSiteRouter() {
+  const [state, setState] = useState(() => parseBrowserLocation());
+
   useEffect(() => {
-    const onHash = () => setState(parseHash(location.hash));
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
-  }, []);
-  const navigate = useCallback((href) => {
-    if (typeof href === 'string') {
-      const h = href.startsWith('#') ? href : '#' + href;
-      if (location.hash !== h) location.hash = h;
-    } else {
-      const h = buildHash(href.route || state.route, { ...state.query, ...(href.query || {}) });
-      if (location.hash !== h) location.hash = h;
+    if (location.hash.startsWith('#/')) {
+      const next = parseHash(location.hash);
+      history.replaceState(null, '', buildPath(next.route, next.query));
+      setState(next);
     }
+
+    const onPop = () => setState(parseBrowserLocation());
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const navigate = useCallback((href) => {
+    let next;
+    if (typeof href === 'string') {
+      next = parseHref(href, state.route);
+    } else {
+      next = {
+        route: href.route || state.route,
+        query: { ...state.query, ...(href.query || {}) },
+      };
+    }
+
+    const path = buildPath(next.route, next.query);
+    if (`${location.pathname}${location.search}` !== path) history.pushState(null, '', path);
+    setState({ ...next, raw: path });
   }, [state]);
+
   const setQuery = useCallback((patch) => {
     const next = { ...state.query, ...patch };
     Object.keys(next).forEach(k => { if (next[k] == null || next[k] === '') delete next[k]; });
-    const h = buildHash(state.route, next);
-    if (location.hash !== h) location.hash = h;
+    const path = buildPath(state.route, next);
+    if (`${location.pathname}${location.search}` !== path) history.pushState(null, '', path);
+    setState({ route: state.route, query: next, raw: path });
   }, [state]);
+
   return { ...state, navigate, setQuery };
 }
 

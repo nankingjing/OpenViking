@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 /* ---------- locale + context ---------- */
 
@@ -18,7 +18,7 @@ export const BlogContext = createContext({
   fallbackLang: 'en',
   t: (m) => pickLocale(m, 'en'),
   formatDate: (iso) => iso,
-  navigate: (href) => { location.hash = href; },
+  navigate: (href) => { location.href = href; },
   postSlug: null,
 });
 
@@ -108,7 +108,7 @@ export function A({ href = '#', children, external }) {
   const isExt = external ?? /^(https?:|mailto:)/.test(href);
   const { navigate } = useBlog();
   const onClick = isExt ? undefined : (e) => {
-    if (href.startsWith('#/')) {
+    if (href.startsWith('#/') || href.startsWith('/')) {
       e.preventDefault();
       navigate(href);
     }
@@ -317,7 +317,7 @@ export function TOC({ minLevel = 2, maxLevel = 3, title }) {
               if (el) {
                 const y = el.getBoundingClientRect().top + window.scrollY - 80;
                 window.scrollTo({ top: y, behavior: 'smooth' });
-                history.replaceState(null, '', `${location.pathname}${location.hash.split('#')[1] ? '#' + location.hash.split('#')[1] : ''}`);
+                history.replaceState(null, '', `${location.pathname}${location.search}#${it.id}`);
               }
             }}>
               <span className="b-toc__num">{String(i+1).padStart(2,'0')}</span>
