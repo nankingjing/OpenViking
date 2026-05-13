@@ -5,7 +5,9 @@
 import asyncio
 import logging
 import os
+import sys
 import time
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable, Optional
@@ -54,6 +56,15 @@ from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
+
+
+def _startup_diag(message: str) -> None:
+    """Emit early startup breadcrumbs directly to stderr."""
+    print(
+        f"[openviking-startup] pid={os.getpid()} {message}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _on_deferred_init_done(task):
@@ -155,14 +166,20 @@ def create_app(
     Returns:
         FastAPI application instance
     """
+    _startup_diag("enter create_app")
     if config is None:
+        _startup_diag("loading server config")
         config = load_server_config()
 
+    _startup_diag(f"config loaded host={config.host} port={config.port} workers={config.workers}")
     validate_server_config(config)
+    _startup_diag("server config validated")
 
     async def _deferred_init(service, app, config):
         """Run heavy initialization in background after server starts accepting requests."""
+        _startup_diag("before service.initialize()")
         await service.initialize()
+        _startup_diag("after service.initialize()")
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
@@ -205,8 +222,11 @@ def create_app(
         """Application lifespan handler."""
         nonlocal service
         owns_service = service is None
+        _startup_diag(f"lifespan enter owns_service={owns_service}")
         if owns_service:
+            _startup_diag("creating OpenVikingService")
             service = OpenVikingService()
+            _startup_diag("OpenVikingService created")
 
         assert service is not None
         set_service(service)
@@ -216,6 +236,7 @@ def create_app(
         )
 
         init_metrics_from_server_config(config, app=app, service=service)
+        _startup_diag("metrics initialized")
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
 
@@ -226,7 +247,9 @@ def create_app(
         oauth_store = getattr(app.state, "oauth_store", None)
         oauth_gc_task: Optional[asyncio.Task] = None
         if oauth_store is not None:
+            _startup_diag("before oauth_store.initialize()")
             await oauth_store.initialize()
+            _startup_diag("after oauth_store.initialize()")
 
             async def _oauth_gc_loop(store) -> None:  # noqa: ANN001
                 while True:
@@ -260,9 +283,15 @@ def create_app(
         async with mcp_lifespan():
             # Start heavy initialization as background task after yield
             if service is not None:
+                _startup_diag("scheduling deferred initialization task")
                 deferred_task = asyncio.create_task(_deferred_init(service, app, config))
                 deferred_task.add_done_callback(_on_deferred_init_done)
-            yield
+            try:
+                yield
+            except Exception:
+                _startup_diag("lifespan raised exception")
+                traceback.print_exc(file=sys.stderr)
+                raise
 
         # Wait for deferred initialization to complete before shutdown
         if deferred_task and not deferred_task.done():

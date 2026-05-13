@@ -41,6 +41,27 @@ from openviking_cli.utils.config.storage_config import StorageConfig
 logger = get_logger(__name__)
 
 
+def _resolve_queuefs_mount_point(config: Any = None) -> str:
+    """Resolve QueueFS mount point for this process.
+
+    `shared` keeps the historical global queue root (`/queue`).
+    `process` isolates each worker under `/queue/worker-<id>`.
+    """
+    scope = getattr(config, "queuefs_scope", None)
+    if not scope:
+        try:
+            from openviking.server.config import load_server_config
+
+            scope = load_server_config().queuefs_scope
+        except Exception:
+            scope = "shared"
+
+    if scope == "process":
+        worker_id = os.environ.get("OPENVIKING_QUEUE_WORKER_ID") or str(os.getpid())
+        return f"/queue/worker-{worker_id}"
+    return "/queue"
+
+
 class OpenVikingService:
     """
     OpenViking main service class.
@@ -121,9 +142,11 @@ class OpenVikingService:
 
         # Initialize QueueManager with agfs_client
         if self._agfs_client:
+            queue_mount_point = _resolve_queuefs_mount_point()
             self._queue_manager = init_queue_manager(
                 agfs=self._agfs_client,
                 timeout=config.agfs.timeout,
+                mount_point=queue_mount_point,
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
             )

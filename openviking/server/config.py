@@ -109,6 +109,7 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    queuefs_scope: str = "shared"  # "shared" or "process"
     auth_mode: Optional[AuthMode] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
