@@ -13,11 +13,11 @@ const foundation = [
     key: 'resources',
     label: 'Resources',
     title: 'Start from the runnable project, not the slogan',
-    body: 'The public article frames OpenViking as both an open-source project and a new interface for agent context management. The useful entry points are the repository, the technical docs, the community feedback channel, and the OpenClaw integration guide.',
+    body: 'OpenViking is an open-source context database for agents. Start from the repository, docs, public feedback channels, and OpenClaw integration guide.',
     items: [
       ['Code and issues', <A href={GITHUB_URL}>volcengine/OpenViking</A>],
       ['Technical docs', <A href={DOCS_URL}>docs.openviking.ai</A>],
-      ['Community feedback', 'Used to collect usage questions, bug reports, and product expectations.'],
+      ['Feedback', 'Public issues and discussions collect usage questions, bug reports, and product expectations.'],
       ['OpenClaw integration', <A href={OPENCLAW_GUIDE_URL}>OpenViking memory plugin guide</A>],
     ],
   },
@@ -25,10 +25,10 @@ const foundation = [
     key: 'background',
     label: 'Background',
     title: 'OpenViking is positioned as a context database for AI agents',
-    body: 'The argument is not that agents need one more memory plugin. The argument is that context has become data: it needs ingestion, indexing, hierarchy, summaries, isolation, retrieval, updates, and a lifecycle.',
+    body: 'OpenViking extends beyond memory plugins. It treats context as data: ingested, indexed, summarized, scoped, retrieved, updated, and preserved across a lifecycle.',
     items: [
       ['Project signal', 'The project reached 4k GitHub stars shortly after release, which created a good moment to explain the category.'],
-      ['Technical lens', 'The talk compares OpenViking with vector databases, file systems, tools, skills, and memory systems.'],
+      ['Technical lens', 'OpenViking is compared with vector databases, file systems, tools, skills, and memory systems.'],
       ['Adoption lens', 'Team AI work depends on code, documents, chats, meeting notes, external references, and local conventions.'],
       ['Agent lens', 'The interface is designed for agents to explore context incrementally rather than consume giant prompts.'],
     ],
@@ -36,11 +36,11 @@ const foundation = [
   {
     key: 'focus',
     label: 'Focus',
-    title: 'The page follows the path from context pain to database-shaped design',
-    body: 'The first half explains why Prompt, RAG, web search, tools, skills, and memory are all context primitives. The second half explains why a database-like layer is needed to make those primitives reliable.',
+    title: 'Context pain leads to database-shaped design',
+    body: 'Prompt, RAG, web search, tools, skills, and memory are context primitives. A database-like layer makes them easier to organize, retrieve, update, and scope.',
     items: [
       ['Context primitives', 'Prompt, RAG, web search, tools, skills, and memory each expose a different part of the problem.'],
-      ['System gap', 'The weak point is not only model capability. It is how information is organized, recalled, trusted, and updated.'],
+      ['System gap', 'Information organization, recall, trust, and updates become the main bottleneck.'],
       ['OpenViking answer', 'Treat context as managed data with command-line operations that agents can learn.'],
       ['Team value', 'Reduce the work humans spend routing background information into agents.'],
     ],
@@ -60,7 +60,7 @@ const pains = [
   {
     title: 'Cross-repository coding breaks local context',
     body: 'Real engineering tasks often cross repositories, design docs, API contracts, historical decisions, and tests. A single working directory gives the agent only a local view.',
-    need: 'The context layer must preserve structure and let the agent move from summary to source evidence.',
+    need: 'The context layer must preserve structure and let the agent move from summary to evidence.',
   },
   {
     title: 'Long-running agents forget recent constraints',
@@ -114,12 +114,19 @@ ov add-resource ./team-docs.zip`,
   },
   {
     label: 'Discover',
-    title: 'Find the entry point before reading the source',
+    title: 'Find the entry point before reading full evidence',
     code: `ov ls
 ov find "How does OpenViking use VikingDB?" --uri=viking://resources/code/volcengine/OpenViking
 ov tree viking://resources/code/volcengine/OpenViking/examples/ -L 2
 ov abstract viking://resources/code/volcengine/OpenViking
 ov read viking://resources/code/volcengine/OpenViking/examples/cloud/GUIDE.md`,
+  },
+  {
+    label: 'Maintain',
+    title: 'Move, rename, and delete context resources',
+    code: `ov mv viking://resources/photo/20260102/example.jpg viking://resources/photo/20260103/
+ov rm viking://resources/photo/20260102/example.jpg
+ov rm -r viking://resources/photo/20260102/`,
   },
   {
     label: 'Reuse',
@@ -145,17 +152,104 @@ const comparisonRows = [
   ['Original files', 'Not retained by default; still being refined', 'Not retained', 'Retained'],
 ];
 
-const adoptionSteps = [
-  ['Deploy the service', 'Start with server mode on a local workstation, cloud VM, or ECS instance. Validate status and logs before adding team data.'],
-  ['Ingest stable sources', 'Start with code repositories and durable documents. Add meeting notes, chats, and external materials later.'],
-  ['Teach agents the reading path', 'Prefer ls and find first, then tree, abstract, overview, and only then read.'],
-  ['Operationalize skills and memory', 'Treat workflows and memories as context resources instead of scattered agent settings.'],
+const documentStages = [
+  {
+    n: '01',
+    title: 'Input document',
+    copy: 'A docx, pdf, markdown file, web page, folder, or archive is added.',
+    output: 'The resource enters OpenViking as a managed context object.',
+    action: 'Use ov add-resource instead of pasting the whole document into a prompt.',
+  },
+  {
+    n: '02',
+    title: 'Chapter paths',
+    copy: 'Structure is preserved as navigable sections and paths.',
+    output: 'Sections become paths such as viking://resources/docs/project/03-design/.',
+    action: 'Use ov tree or ov ls first to understand shape before reading.',
+  },
+  {
+    n: '03',
+    title: 'Content modules',
+    copy: 'Content is split into semantically coherent units.',
+    output: 'Each unit carries a point, process, interface, case, or decision.',
+    action: 'Use ov find to locate entry points and ov overview to decide whether to expand.',
+  },
+  {
+    n: '04',
+    title: 'Modal elements',
+    copy: 'Tables, images, code blocks, links, and attachments become context elements.',
+    output: 'Non-text material becomes searchable and referable context.',
+    action: 'Start from summaries, then follow URIs into specific elements.',
+  },
+  {
+    n: '05',
+    title: 'Summary ladder',
+    copy: 'L0 summaries, abstracts, overview, and full content form a reading ladder.',
+    output: 'The agent can move from coarse signals to precise evidence.',
+    action: 'Read summaries first; call ov read only when the evidence is insufficient.',
+  },
 ];
 
-function StickyNav({ label, items, prefix }) {
+const adoptionSteps = [
+  {
+    title: 'Deploy the service',
+    body: 'Use server mode on a local or self-hosted machine before adding team data.',
+    code: `uv venv openviking-env
+source openviking-env/bin/activate
+uv pip install openviking --upgrade
+# Configure OpenViking according to the repository README.
+nohup openviking-server > openviking.log 2>&1 &`,
+    check: 'Run ov status first.',
+  },
+  {
+    title: 'Ingest stable resources',
+    body: 'Start with repositories and durable documents, then add meetings, chats, project records, and references.',
+    code: `ov add-resource https://github.com/volcengine/OpenViking
+ov add-resource https://arxiv.org/pdf/2602.09540
+ov add-resource ./team_building.jpg
+ov add-resource ./project.docx
+ov add-resource ./team-docs.zip`,
+    check: 'Configure access and credentials before adding private repositories.',
+  },
+  {
+    title: 'Teach agents the reading path',
+    body: 'Agents should move from root structure to search, tree, abstract, overview, and full content only when needed.',
+    code: `ov ls
+ov find "How does OpenViking use VikingDB?" --uri=viking://resources/code/volcengine/OpenViking
+ov tree viking://resources/code/volcengine/OpenViking/examples/ -L 2
+ov abstract viking://resources/code/volcengine/OpenViking
+ov read viking://resources/code/volcengine/OpenViking/examples/cloud/GUIDE.md`,
+    check: 'ls, tree, and find return L0 summaries.',
+  },
+  {
+    title: 'Operationalize skills and memory',
+    body: 'Manage workflows, preferences, and durable lessons as context resources.',
+    code: `ov status
+ov observer vlm
+ov add-skill ./my-skill/examples/openviking-cli-skills
+ov find "OpenViking usage tips" --uri=viking://agent/skills
+ov add-memory ./2026-03-04/memory-2026-03-04.md`,
+    check: 'Make status, logs, skills, and memory observable.',
+  },
+];
+
+function EnglishLocalNavStyle() {
   return (
-    <nav className="ovx-sticky-tabs" aria-label={label}>
-      <div className="ovx-sticky-tabs__label">{label}</div>
+    <style>{`
+      .ovx-local-tabs { margin: 30px 0 18px; padding: 8px 0; border-top: 1px solid var(--th-line); border-bottom: 1px solid var(--th-line); background: color-mix(in oklab, var(--th-bg) 94%, transparent); }
+      .ovx-local-tabs__label { margin-bottom: 6px; color: var(--th-mute); font-family: var(--th-font-mono); font-size: 11px; letter-spacing: 0.12em; line-height: 1.4; text-transform: uppercase; }
+      @media (max-width: 760px) {
+        .ovx-local-tabs { margin: 24px 0 14px; padding: 6px 0; }
+        .ovx-local-tabs__label { margin-bottom: 4px; }
+      }
+    `}</style>
+  );
+}
+
+function LocalNav({ label, items, prefix }) {
+  return (
+    <nav className="ovx-local-tabs" aria-label={label}>
+      <div className="ovx-local-tabs__label">{label}</div>
       <div className="ovx-tab-strip">
         {items.map(item => (
           <a className="ovx-tab" href={`#${prefix}-${item.key || item[0].toLowerCase().replace(/[^a-z0-9]+/g, '-')}`} key={item.key || item[0]}>
@@ -170,11 +264,11 @@ function StickyNav({ label, items, prefix }) {
 function ResourceSection() {
   return (
     <section>
-      <H3 id="en-resources">Resources, Background, and What This Talk Is Really About</H3>
+      <H3 id="en-resources">Resources, Background, and What OpenViking Is For</H3>
       <Lead>
-        The useful framing is practical: OpenViking is not just an idea about memory. It is an attempt to make context manageable as data.
+        OpenViking turns context into data agents can manage.
       </Lead>
-      <StickyNav label="section shortcuts" items={foundation} prefix="en-foundation" />
+      <LocalNav label="section shortcuts" items={foundation} prefix="en-foundation" />
       <div className="ovx-section-stack">
         {foundation.map(section => (
           <article className="ovx-tab-panel" id={`en-foundation-${section.key}`} key={section.key}>
@@ -202,9 +296,9 @@ function ContextPrimitiveSection() {
     <section>
       <H3 id="en-context-primitives">Prompt, RAG, Web Search, Tools, Skills, and Memory</H3>
       <P>
-        These are not mutually exclusive layers. They are different ways to put information, rules, actions, and experience into the model loop.
+        These layers are complementary ways to put information, rules, actions, and experience into the model loop.
       </P>
-      <StickyNav label="context primitives" items={navItems} prefix="en-primitive" />
+      <LocalNav label="context primitives" items={navItems} prefix="en-primitive" />
       <div className="ovx-section-stack">
         {primitives.map(([label, contribution, risk]) => (
           <article className="ovx-tab-panel" id={`en-primitive-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`} key={label}>
@@ -216,7 +310,7 @@ function ContextPrimitiveSection() {
       </div>
       <Table
         caption="The same problem appears through six different context primitives."
-        headers={['Primitive', 'What it contributes', 'Why it is not enough alone']}
+        headers={['Primitive', 'What it contributes', 'Where it needs support']}
         rows={primitives}
       />
     </section>
@@ -239,7 +333,7 @@ function PainAndFormulaSection() {
           ))}
         </div>
         <Ul marker="check">
-          <Li>The common failure is not only model quality; it is context routing, structure, trust, and memory.</Li>
+          <Li>Context routing, structure, trust, and memory are the common failure points.</Li>
           <Li>If humans repeatedly paste background into the model, automation gains disappear into information orchestration.</Li>
           <Li>OpenViking starts by making context a managed data layer, then lets agents read and update it through stable commands.</Li>
         </Ul>
@@ -247,7 +341,7 @@ function PainAndFormulaSection() {
 
       <section>
         <H3 id="en-context-formula">The Context Engineering Formula</H3>
-        <Quote cite="OpenViking talk">
+        <Quote cite="Context engineering formula">
           Context engineering = reliable reasoning constraints + complete information organization + effective context recommendation + full-lifecycle memory + traceable self-evolving learning.
         </Quote>
         <div className="ovx-formula">
@@ -317,7 +411,7 @@ export function EnglishArchitectureBlocks() {
       <section>
         <H3 id="en-ranking-lab">Paradigm Ranking: There Is No Silver Bullet</H3>
         <P>
-          The talk compares vector indexes, graph, file-system organization, and table-style metadata across several dimensions. The point is not to pick one winner. The point is to combine their strengths for agent work.
+          Vector indexes, graph, file-system organization, and table-style metadata each solve a different part of information organization. The point is not to pick one winner. The point is to combine their strengths for agent work.
         </P>
         <Table
           headers={['Dimension', 'Best fit', 'OpenViking implication']}
@@ -366,9 +460,9 @@ export function EnglishArchitectureBlocks() {
       <section>
         <H3 id="en-cli-path">CLI Path for Data, Query, Skills, Memory, and Bot</H3>
         <P>
-          The command line is not a side feature. It is the surface through which agents can learn to explore the context database.
+          The CLI is the agent-facing surface for exploring the context database.
         </P>
-        <StickyNav label="CLI paths" items={cliFlows.map(item => [item.label])} prefix="en-cli" />
+        <LocalNav label="CLI paths" items={cliFlows.map(item => [item.label])} prefix="en-cli" />
         <div className="ovx-section-stack">
           {cliFlows.map(flow => (
             <article className="ovx-tab-panel" id={`en-cli-${flow.label.toLowerCase()}`} key={flow.label}>
@@ -386,22 +480,22 @@ export function EnglishPracticeBlocks() {
   return (
     <>
       <Lead>
-        The practical half of the talk clarifies product boundaries, document decomposition, team adoption, OpenClaw memory, and VikingBot.
+        Practice focuses on product boundaries, long documents, team adoption, OpenClaw memory, VikingBot, takeaways, and the roadmap.
       </Lead>
 
       <section>
         <H3 id="en-database-boundary">How OpenViking Differs From Vector Databases and File Systems</H3>
         <P>
-          A vector database answers semantic ranking questions. A file system gives humans and agents a familiar traversal model. OpenViking uses both ideas, but exposes a higher-level interface for agent context.
+          A vector database ranks semantic matches. A file system provides traversal. OpenViking exposes a data interface for agent context.
         </P>
         <Table
-          caption="A public-facing product boundary summary."
+          caption="Product boundaries across OpenViking, vector databases, and file systems."
           headers={['Capability', 'OpenViking context database', 'Vector database', 'File system']}
           rows={comparisonRows}
         />
         <Callout type="info" title="More implementation detail">
           <P>
-            The public article keeps the product boundary in view and leaves environment-specific deployment detail to the
+            Product boundaries are summarized here. Installation, deployment, and implementation details live in the
             {' '}<A href={DOCS_URL}>OpenViking technical docs</A>.
           </P>
         </Callout>
@@ -413,16 +507,10 @@ export function EnglishPracticeBlocks() {
       <section>
         <H3 id="en-document-decomposition">How Long Documents Become Context</H3>
         <P>
-          A long document should not always remain one giant file. OpenViking can decompose and reorganize documents so agents can read from coarse summaries to precise evidence.
+          OpenViking does not force a long document to stay as one file. It decomposes, reorganizes, and summarizes it for staged reading.
         </P>
         <div className="ovx-loop">
-          {[
-            ['01', 'Source', 'A docx, pdf, markdown file, web page, folder, or archive is added.'],
-            ['02', 'Chapters', 'Structure is preserved as navigable sections and paths.'],
-            ['03', 'Modules', 'Content is split into semantically coherent units.'],
-            ['04', 'Elements', 'Tables, images, code blocks, links, and attachments become context elements.'],
-            ['05', 'Summaries', 'L0 summaries, abstracts, overview, and source text form a reading ladder.'],
-          ].map(([n, title, copy]) => (
+          {documentStages.map(({ n, title, copy }) => (
             <div className="ovx-loop__step" key={title}>
               <div className="ovx-loop__n">{n}</div>
               <div className="ovx-loop__title">{title}</div>
@@ -430,18 +518,31 @@ export function EnglishPracticeBlocks() {
             </div>
           ))}
         </div>
+        <Table
+          headers={['Stage', 'Output shape', 'Agent action']}
+          rows={documentStages.map(stage => [stage.title, stage.output, stage.action])}
+        />
+        <Callout type="tip" title="Reading-window strategy">
+          <P>
+            The goal is simple: vectorizable units, coherent meaning, and lower model-window cost.
+          </P>
+        </Callout>
       </section>
 
       <section>
         <H3 id="en-team-adoption">Using OpenViking to Improve Team AI Capability</H3>
         <P>
-          The talk's team-level claim is direct: information flow efficiency, which is context processing efficiency, becomes an individual and organizational advantage.
+          Context processing efficiency sets the ceiling for team AI work.
         </P>
         <div className="ovx-section-stack">
-          {adoptionSteps.map(([title, body]) => (
-            <article className="ovx-tab-panel" key={title}>
-              <H4>{title}</H4>
-              <P>{body}</P>
+          {adoptionSteps.map(step => (
+            <article className="ovx-tab-panel" key={step.title}>
+              <H4>{step.title}</H4>
+              <P>{step.body}</P>
+              <Pre lang="bash" filename={`${step.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.sh`}>{step.code}</Pre>
+              <Callout type="note" title="Checkpoint">
+                <P>{step.check}</P>
+              </Callout>
             </article>
           ))}
         </div>
@@ -449,7 +550,7 @@ export function EnglishPracticeBlocks() {
           <Col>
             <H4>Demo A: multi-repository technical question</H4>
             <P>
-              The motivating case is answering a real engineering question across historical repositories and design documents, not a toy single-repo code search task.
+              It gives agents cross-repo, cross-doc context for real engineering questions.
             </P>
           </Col>
           <Col>
@@ -466,7 +567,7 @@ export function EnglishPracticeBlocks() {
       <section>
         <H3 id="en-openclaw-memory">OpenViking and OpenClaw Memory Practice</H3>
         <P>
-          OpenClaw is a good example of the memory problem. When an agent works across longer periods, user preferences and corrections must become retrievable resources, not just messages in the current chat.
+          OpenClaw shows the memory problem clearly. Longer tasks need preferences and corrections as retrievable context instead of raw chat messages.
         </P>
         <Table
           headers={['Pain point', 'OpenViking practice']}
@@ -478,23 +579,52 @@ export function EnglishPracticeBlocks() {
           ]}
         />
         <Callout type="note" title="Demo B">
-          <P>Give OpenClaw better memory by turning useful preferences, constraints, facts, and outcomes into searchable context resources.</P>
+          <P>Turn useful preferences, constraints, facts, and outcomes into searchable memory.</P>
         </Callout>
         <Pre lang="bash" filename="openclaw-memory.sh">{`curl -fSL https://openclaw.ai/install.sh | bash
 # Follow the OpenViking memory plugin guide:
 # ${OPENCLAW_GUIDE_URL}
 ov add-memory ./2026-03-04/memory-2026-03-04.md`}</Pre>
+        <div className="ovx-compare-grid ovx-compare-grid--three">
+          {[
+            ['Memory input', 'File interface and session summaries', 'Memory can be added explicitly or distilled from session summaries.'],
+            ['Memory retrieval', 'Search memory like context', 'OpenClaw retrieves relevant long-term memory instead of carrying every past turn.'],
+            ['Practice boundary', 'Not infinite chat retention', 'Useful memory is summarized, compressed, reorganized, scoped, and explainable.'],
+          ].map(([label, title, body]) => (
+            <article className="ovx-compare-card" key={label}>
+              <div className="ovx-compare-card__label">{label}</div>
+              <h4 className="ovx-compare-card__title">{title}</h4>
+              <p className="ovx-compare-card__body">{body}</p>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section>
         <H3 id="en-vikingbot">Demo C: VikingBot and Feedback Loop</H3>
         <P>
-          VikingBot demonstrates the same context layer through a native agent interface. It lets a team test ingestion quality, retrieval quality, summaries, and reading paths through conversation.
+          VikingBot is a native agent interface for testing ingestion, retrieval, summaries, and reading paths.
         </P>
         <Pre lang="bash" filename="vikingbot.sh">{`openviking-server --with-bot
 ov chat -m "Ask your question"
 ov status
 ov observer vlm`}</Pre>
+        <Cols count={2}>
+          <Col>
+            <H4>Native agent exploration</H4>
+            <P>
+              With <code>--with-bot</code>, <code>ov chat</code> can use connected resources, skills, summaries, retrieval, and memory context.
+            </P>
+          </Col>
+          <Col>
+            <H4>Feedback path</H4>
+            <Ul marker="check">
+              <Li>Use GitHub issues and discussions for questions, bugs, and product feedback.</Li>
+              <Li>Use the technical docs for installation, deployment, and implementation detail.</Li>
+              <Li>Use VikingBot to check ingestion, retrieval, summaries, and reading paths.</Li>
+            </Ul>
+          </Col>
+        </Cols>
       </section>
 
       <section>
@@ -503,14 +633,21 @@ ov observer vlm`}</Pre>
           <Li>The larger the context corpus, the more important retrieval quality and organization become.</Li>
           <Li>Every high-efficiency team should have its own context database for full-domain information integration.</Li>
           <Li>Vectors, file systems, graphs, and tables are forms. Agents need an operable data interface.</Li>
-          <Li>OpenViking is not only a memory component. It is a context database for complex agent tasks.</Li>
+          <Li>OpenViking is a context database for complex agent tasks, with memory as one built-in use case.</Li>
           <Li>The future capability of agents is largely a context capability: knowledge, memory, tools, and organization.</Li>
         </Ul>
-        <Callout type="note" title="Roadmap">
+        <Callout type="note" title="Deployment evolution">
           <P>
-            The roadmap points toward community standards, stronger single-machine operations, multimodal context, memory and skill retrieval, and eventually distributed deployment.
+            OpenViking starts with local and self-hosted validation, then moves toward managed, distributed, and stable-upgrade options.
           </P>
         </Callout>
+        <H4>Roadmap</H4>
+        <Ol>
+          <Li>Build ecosystem standards and promote reusable protocols.</Li>
+          <Li>Strengthen single-machine operations, stable releases, and smooth upgrades.</Li>
+          <Li>Improve multimodal context, memory retrieval, skill retrieval, and content-understanding interfaces.</Li>
+          <Li>Build distributed capabilities and public-cloud integrations for more reliable consistency.</Li>
+        </Ol>
       </section>
 
       <P>
@@ -523,6 +660,7 @@ ov observer vlm`}</Pre>
 export default function OpenVikingEnglishBlocks() {
   return (
     <>
+      <EnglishLocalNavStyle />
       <H2>Why Context Engineering Becomes a Database Problem</H2>
       <EnglishContextBlocks />
 

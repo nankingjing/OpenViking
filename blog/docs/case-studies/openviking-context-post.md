@@ -18,6 +18,7 @@ This case study records the practical decisions from converting a Lark document 
 4. Keep machine-readable routing out of the human article. Put discovery in HTML metadata, `link rel="alternate"`, and `/llms.txt`.
 5. Treat the cover as an editorial signal. Use one abstract insight instead of a diagram that tries to explain every system component.
 6. Make language switching affect everything visible near the article, including the TOC, dates, labels, and fold controls. It should not require a refresh.
+7. Convert source material into final public prose. Readers cannot access the original Lark document, so the article should not say what the source, talk, or rewrite is doing. State the argument directly in Chinese first, then align English and `llm.txt`.
 
 Cover preference learned from review: watercolor on cream paper works well when it preserves space and abstraction. For OpenViking covers, use the OV sail/crescent logo only as a small structural hint, not a large badge. Prefer warm gold, muted sage, graphite, and light umber with only minimal indigo depth; avoid literal keys, locks, oversized logos, and blue/purple-dominant brand art.
 
@@ -29,7 +30,7 @@ The first implementation pass should establish the article frame, not pretend to
 2. Run parallel agents once the skeleton exists. Split them by concern: source/content gaps, frontend rendering blocks, and terminology/translation QA.
 3. Fill the article from the content-gap pass before adding visual complexity. A pretty block that hides a missing argument does not solve the review problem.
 4. Add interactive blocks only when the same information is also discoverable by scrolling. Buttons and tabs can focus attention, but should not be the only place where critical content exists.
-5. Translate after the structure and components stabilize. Custom component labels, sticky nav, tables, and active states need the same language discipline as paragraphs.
+5. Translate after the structure and components stabilize. Custom component labels, local nav, tables, and active states need the same language discipline as paragraphs.
 6. Re-run build and static checks after the second pass, including generated HTML, `/llms.txt`, and the post-level `llm.txt`.
 
 ## Specific Implementation Notes
@@ -46,6 +47,7 @@ The first implementation pass should establish the article frame, not pretend to
 - "Softened demo framing" means the first public rewrite turned explicit Demo A/B/C sections into more general prose. The cleanup pass restored public demo labels for the multi-repository technical question, OpenClaw memory, and VikingBot so readers can see the original talk structure without exposing internal-only artifacts.
 - The public-safety pass must cover generated agent text, not only the React article. Remove internal deployment routes, private platform names, proxy commands, private source links, local employee home paths, and speaker/person rosters from `llm.txt` when they are not also intended for the public zh/en article.
 - Public provenance should point readers to GitHub, `docs.openviking.ai`, public discussions, and public install guides. Private Lark URLs may be useful while authoring, but should not appear in public page metadata or `/llms.txt` unless explicitly approved.
+- Public prose should be short and declarative. Avoid review-note constructions such as "the point is not X, but Y" when a direct sentence can carry the idea. Local chip rails should be non-sticky; the global Chinese and English TOC owns sticky navigation.
 
 ## Review Challenges To Expect
 

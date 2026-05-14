@@ -21,6 +21,7 @@ For blog-wide mobile/PWA polish, also read
 7. For phone-view polish, use screenshots as the source of truth. Keep the first viewport content-first, collapse dense controls to one line by default, use real short mobile labels instead of clipped text, and add PWA icons/manifest without a service worker unless offline caching is explicitly wanted.
 8. Public Lark-derived posts need a publication-safety pass across every surface: zh HTML, en HTML, post `llm.txt`, generated page metadata, and site `/llms.txt`. Do not expose private Lark wiki URLs, internal domains, internal proxies, employee/speaker rosters, private home paths, or internal deployment/community instructions unless the user explicitly says that material is public. Prefer GitHub, `docs.openviking.ai`, and public discussion links for follow-up detail.
 9. Keep zh, en, and `llm.txt` content aligned. The agent-readable markdown can be plainer than the human page, but it must not contain extra internal details or source-only sections that the public zh/en article intentionally removed. If the human post uses a public-facing summary table, make `llm.txt` use the same public boundary.
+10. When converting a private or source document into a public blog post, write the HTML as the final article, not as commentary about the source. Readers cannot see the original document. Draft Chinese first for direct public prose, remove roundabout framing such as "the point is not..." review notes, then align English and `llm.txt` to that public version.
 
 ---
 
@@ -104,7 +105,7 @@ Write bilingual content in this order:
 1. **Scaffold the post first.** Map the source into the thesis, H2 sections, key examples, metadata, cover, and `llm.txt` path before polishing individual paragraphs.
 2. **Write the English version first.** Get the structure, examples, and technical content right. For long architecture posts, make the first pass a coherent frame, not the final density target.
 3. **Run a second filling pass.** Use parallel agents when allowed: one for source/content gaps, one for frontend rendering blocks, and one for terminology/translation QA. Integrate their work into one coherent article instead of pasting isolated panels.
-4. **Translate to Chinese after the structure stabilizes.** Produce a faithful translation, including custom component labels, sticky nav, tables, captions, and interactive states.
+4. **Translate to Chinese after the structure stabilizes.** Produce a faithful translation, including custom component labels, local nav, tables, captions, and interactive states.
 5. **Optimize the Chinese version for natural tone.** Follow the [shuorenhua](https://github.com/MrGeDiao/shuorenhua) guidelines: no AI filler, no template openers/closers ("In this article we will explore..."), no empty adjectives. Write like you're explaining to a colleague, not writing a press release.
 
 ---

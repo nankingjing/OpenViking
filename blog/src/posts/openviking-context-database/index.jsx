@@ -17,7 +17,7 @@ const OpenVikingContextDatabaseZh = () => (
       资料要能被组织、索引、摘要、推荐、记忆和持续更新，而不是每次都靠人把背景塞进窗口。
     </Lead>
 
-    <Quote cite="OpenViking 分享原文">
+    <Quote cite="上下文工程工作公式">
       上下文工程 = 可靠的推理流程约束 + 完整的信息组织 + 有效的上下文推荐 + 全生命周期记忆 + 可跟踪的自进化学习。
     </Quote>
 
@@ -39,7 +39,7 @@ const OpenVikingContextDatabaseEn = () => (
       It treats context as data for agents: something that can be ingested, organized, indexed, summarized, recommended, remembered, and continuously updated.
     </Lead>
 
-    <Quote cite="OpenViking talk">
+    <Quote cite="OpenViking working formula">
       Context engineering = reliable reasoning constraints + complete information organization + effective context recommendation + full-lifecycle memory + traceable self-evolving learning.
     </Quote>
 

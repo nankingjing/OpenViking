@@ -49,7 +49,7 @@ export function PracticeBlockStyle() {
       .ovp-kicker { font-family: var(--th-font-mono); font-size: 11px; color: var(--th-mute); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 10px; }
       .ovp-subtle { color: var(--th-mute); }
       .ovp-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; }
-      .ovp-jumpbar { position: sticky; top: 68px; z-index: 4; margin-left: -2px; margin-right: -2px; padding: 9px 2px; background: color-mix(in oklab, var(--th-bg) 92%, transparent); backdrop-filter: blur(12px); border-top: 1px solid color-mix(in oklab, var(--th-line) 70%, transparent); border-bottom: 1px solid color-mix(in oklab, var(--th-line) 70%, transparent); }
+      .ovp-localbar { margin: 18px -2px; padding: 9px 2px; background: color-mix(in oklab, var(--th-bg) 92%, transparent); border-top: 1px solid color-mix(in oklab, var(--th-line) 70%, transparent); border-bottom: 1px solid color-mix(in oklab, var(--th-line) 70%, transparent); }
       .ovp-tabs button { border: 1px solid var(--th-line); border-radius: 999px; background: transparent; color: var(--th-mute); cursor: pointer; font-family: var(--th-font-mono); font-size: 12px; min-height: 34px; padding: 7px 12px; transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease; }
       .ovp-tabs button:hover { border-color: var(--tone, var(--th-ink)); color: var(--th-ink); }
       .ovp-tabs button:active { transform: scale(0.98); }
@@ -109,7 +109,7 @@ const comparisonProducts = [
     label: 'OpenViking',
     tone: '#4a8c5a',
     title: '上下文数据库：把上下文当作 Agent 可操作的数据',
-    summary: '管理对象是文件、文本、链接、对话历史和派生摘要。能力重点不是单点检索，而是增删查改、语义检索、层次保留、自动解析、自动摘要、数据隔离、原生记忆插件和内置 bot/RAG。',
+    summary: '管理对象是文件、文本、链接、对话历史和派生摘要。能力覆盖增删查改、语义检索、层次保留、自动解析、自动摘要、数据隔离、原生记忆插件和内置 bot/RAG。',
     relation: '它会用到向量检索，也借鉴文件系统范式，但对 Agent 暴露的是更完整的数据管理接口。',
     tags: ['增删查改', '语义检索', '层次结构', '自动摘要', 'Memory', 'Bot'],
   },
@@ -124,7 +124,7 @@ const comparisonProducts = [
   },
   {
     key: 'filesystem',
-    label: 'LocalFS / AGFS / TOS',
+    label: 'LocalFS / 对象存储',
     tone: '#8b6f2f',
     title: '文件系统：人和 Agent 都容易理解的组织范式',
     summary: '管理对象是文件，天然保留目录层次，适合遍历、移动、重命名、权限隔离和原始文件保留。查询往往依赖 grep 或其他应用。',
@@ -156,11 +156,10 @@ export function DatabaseComparison() {
       <div className="ovp-kicker">database boundary</div>
       <H3>与向量库、文件系统的区别与联系</H3>
       <P>
-        原文把 OpenViking 定义为“上下文数据库”。这个定义的关键在于：它面向 AI Agent
-        按特定范式存储、管理、检索上下文信息，并具备自动数据处理和计算能力。
+        OpenViking 是面向 AI Agent 的上下文数据库：按统一范式存储、管理、检索上下文，并自动解析、摘要和索引。
       </P>
 
-      <div className="ovp-tabs ovp-jumpbar" style={{ '--tone': active.tone }} aria-label="上下文数据库能力对比快速跳转">
+      <div className="ovp-tabs ovp-localbar" style={{ '--tone': active.tone }} aria-label="上下文数据库能力对比快速跳转">
         {comparisonProducts.map(item => (
           <button
             type="button"
@@ -195,15 +194,14 @@ export function DatabaseComparison() {
       </div>
 
       <Table
-        caption="公开文章摘要版：重点保留 OpenViking、向量库、文件系统的产品边界。"
-        headers={['产品特性', 'OpenViking 上下文数据库', 'VikingDB 向量库', 'LocalFS / AGFS / TOS 文件系统']}
+        caption="OpenViking、向量库、文件系统的产品边界。"
+        headers={['产品特性', 'OpenViking 上下文数据库', 'VikingDB 向量库', 'LocalFS / 对象存储文件系统']}
         rows={comparisonRows}
       />
 
       <Callout type="info" title="更多实现细节">
         <P>
-          相关实现细节可继续阅读 <A href={OPENVIKING_DOCS}>OpenViking 技术文档</A>。公开文章保留产品边界，
-          避免把部署环境或特定平台细节混进核心概念。
+          这里先讲产品边界；安装、部署和实现细节见 <A href={OPENVIKING_DOCS}>OpenViking 技术文档</A>。
         </P>
       </Callout>
 
@@ -240,7 +238,7 @@ const documentStages = [
     title: '拆成语义相对独立的内容模块',
     body: '章节继续拆成更小模块，保证每个模块可以直接向量化，语义相对独立，并能被低成本放入模型窗口。',
     output: '模块通常承载一个观点、流程、接口说明、案例或决策。',
-    agentAction: '用 ov find 定位入口，再用 ov overview 判断是否需要读原文。',
+    agentAction: '用 ov find 定位入口，再用 ov overview 判断是否需要读取完整正文。',
   },
   {
     key: 'modal',
@@ -255,8 +253,8 @@ const documentStages = [
     key: 'summary',
     label: '摘要层级',
     tone: '#b5533f',
-    title: 'L0 摘要、overview 和原文组成阅读路径',
-    body: 'ls、tree、find 等命令会返回轻量摘要；abstract 给完整摘要；overview 帮助了解内容结构；read 才进入原文。',
+    title: 'L0 摘要、overview 和完整正文组成阅读路径',
+    body: 'ls、tree、find 等命令会返回轻量摘要；abstract 给完整摘要；overview 帮助了解内容结构；read 才进入完整正文。',
     output: '上下文读取路径从粗到细，避免“读窗口陷阱”。',
     agentAction: '先摘要，后 overview，最后 read。只有证据不足时才展开全文。',
   },
@@ -271,11 +269,10 @@ export function DocumentDecomposition() {
       <div className="ovp-kicker">document as context</div>
       <H3>长文档拆解和重组为上下文的例子</H3>
       <P>
-        原文强调，OpenViking 与典型文件系统的一个较大差异，是文件可能被拆解和重组后再进行存储。
-        目标是让资料更容易被直接访问、提取、向量化和逐级阅读。
+        OpenViking 不把长文档固定成一个文件。它会拆解、重组并建立摘要层级，让 Agent 能逐级阅读。
       </P>
 
-      <div className="ovp-tabs ovp-jumpbar" style={{ '--tone': active.tone }} aria-label="长文档处理阶段快速跳转">
+      <div className="ovp-tabs ovp-localbar" style={{ '--tone': active.tone }} aria-label="长文档处理阶段快速跳转">
         {documentStages.map(stage => (
           <button
             type="button"
@@ -327,8 +324,7 @@ export function DocumentDecomposition() {
 
       <Callout type="tip" title="阅读窗口策略">
         <P>
-          OpenViking 的拆解不是为了制造更多碎片，而是为了同时满足三个条件：
-          <Strong> 可直接向量化</Strong>、<Strong>语义相对独立</Strong>、<Strong>阅读窗口占用低</Strong>。
+          拆解的目标很明确：<Strong> 可向量化</Strong>、<Strong>语义独立</Strong>、<Strong>少占窗口</Strong>。
         </P>
       </Callout>
     </section>
@@ -341,7 +337,7 @@ const adoptionSteps = [
     label: 'Server mode',
     tone: '#4a8c5a',
     title: '优先用服务化方式快速验证',
-    body: 'OpenViking 可以嵌入 Python 程序，也可以用 Server mode 快速验证。本地机器、云主机或 ECS 都适合先跑通服务。',
+    body: 'OpenViking 可嵌入 Python 程序，也可用 Server mode 在本地或自托管服务器快速验证。',
     command: `uv venv openviking-env
 source openviking-env/bin/activate
 uv pip install openviking --upgrade
@@ -354,39 +350,39 @@ nohup openviking-server > ~/.openviking/openviking.log 2>&1 &`,
     label: '接入资料',
     tone: '#1B365D',
     title: '把团队知识接到同一个上下文层',
-    body: '资料来源可以是代码仓库、私有 GitLab、论文、图片、PDF、项目文档、团队目录或压缩包。',
+    body: '资料可以来自代码仓库、论文、图片、PDF、项目文档、团队目录或压缩包。',
     command: `ov add-resource https://github.com/volcengine/OpenViking
 ov add-resource https://arxiv.org/pdf/2602.09540
 ov add-resource ./team_building.jpg
 ov add-resource ./project.docx
 ov add-resource ./team-docs.zip`,
-    check: '私有仓库要确认服务端具备访问权限，并按部署文档配置 Git 域名和凭证。',
+    check: '私有仓库需先配置服务端访问权限和凭证。',
   },
   {
     key: 'discover',
     label: '发现上下文',
     tone: '#8b6f2f',
     title: '先找入口，再展开证据',
-    body: 'Agent 不应该一次读完所有资料。它可以从根目录、语义检索、目录树、摘要和原文逐级深入。',
+    body: 'Agent 不应一次读完所有资料，而应从根目录、语义检索、目录树、摘要到正文逐级深入。',
     command: `ov ls
 ov find "How does OpenViking use VikingDB?" --uri=viking://resources/code/volcengine/OpenViking
 ov tree viking://resources/code/volcengine/OpenViking/examples/ -L 2
 ov abstract viking://resources/code/volcengine/OpenViking
 ov read viking://resources/code/volcengine/OpenViking/examples/cloud/GUIDE.md`,
-    check: 'ls、tree、find 会自动返回 L0 摘要，先用摘要判断是否继续读。',
+    check: 'ls、tree、find 会返回 L0 摘要，先用摘要判断是否继续读。',
   },
   {
     key: 'operate',
     label: '运维和观察',
     tone: '#7a4f9a',
     title: '让上下文服务可观察、可维护',
-    body: '团队落地时，服务状态、日志、资源更新、技能和记忆都需要进入日常运维视角。',
+    body: '团队落地时，状态、日志、资源更新、技能和记忆都要可观察、可维护。',
     command: `ov status
 ov observer vlm
 ov add-skill ./my-skill/examples/openviking-cli-skills
 ov find "OpenViking 使用技巧" --uri=viking://agent/skills
 ov add-memory ./2026-03-04/memory-2026-03-04.md`,
-    check: '把技能和记忆也当成上下文资源管理，而不是散落在不同 Agent 配置里。',
+    check: '技能和记忆也应作为上下文资源管理。',
   },
 ];
 
@@ -399,11 +395,10 @@ export function TeamAdoptionPlaybook() {
       <div className="ovp-kicker">team adoption</div>
       <H3>用 OpenViking 改善团队 AI 能力</H3>
       <P>
-        原文的判断很直接：信息处理流转效率，也就是上下文处理效率，决定个体和组织的竞争力。
-        大规模信息集成和组织能力，是 OpenViking 提供给团队的新武器。
+        上下文处理效率决定团队使用 AI 的上限。OpenViking 把分散资料接入同一个上下文层。
       </P>
 
-      <div className="ovp-tabs ovp-jumpbar" style={{ '--tone': active.tone }} aria-label="团队落地步骤快速跳转">
+      <div className="ovp-tabs ovp-localbar" style={{ '--tone': active.tone }} aria-label="团队落地步骤快速跳转">
         {adoptionSteps.map(step => (
           <button
             type="button"
@@ -443,8 +438,7 @@ export function TeamAdoptionPlaybook() {
         <Col>
           <H4>综合案例 A：多仓库业务技术问题</H4>
           <P>
-            原文的推荐方向案例，是在大规模历史仓库下回答实际业务技术问题。关键不是单仓库代码问答，
-            而是让 Agent 跨多个仓库、文档和历史设计记录定位上下文。
+            它让 Agent 跨仓库、文档和历史设计记录定位上下文，不止回答单仓库代码问题。
           </P>
         </Col>
         <Col>
@@ -473,8 +467,7 @@ export function OpenClawMemoryPractice() {
       <div className="ovp-kicker">openclaw memory</div>
       <H3>OpenViking 与 OpenClaw 的最佳实践</H3>
       <P>
-        原文把 OpenClaw 作为一个典型自主智能体场景：当任务周期变长，用户会明显感受到“刚说过的要求又被忘了”。
-        OpenViking 的角色，是把 OpenClaw 的长期记忆组件变成可管理、可检索、可更新的上下文数据库。
+        OpenClaw 的任务周期越长，记忆问题越明显。OpenViking 把长期记忆变成可管理、可检索、可更新的上下文。
       </P>
 
       <Table
@@ -484,8 +477,7 @@ export function OpenClawMemoryPractice() {
 
       <Callout type="info" title="安装和集成路径">
         <P>
-          如果还没有安装 OpenClaw，可以按官方安装方式先完成本地验证。
-          安装后，把 OpenViking 的 OpenClaw memory plugin 安装文档交给 OpenClaw，让它按文档部署为内置记忆组件。
+          先安装 OpenClaw，再按 OpenViking memory plugin 文档把 OpenViking 接成内置记忆组件。
         </P>
       </Callout>
 
@@ -496,7 +488,7 @@ export function OpenClawMemoryPractice() {
 
 ov add-memory ./2026-03-04/memory-2026-03-04.md`}</Pre>
 
-      <Quote cite="OpenViking 分享原文">
+      <Quote cite="Demo B">
         演示 B：让 OpenClaw 具备更好的记忆。
       </Quote>
 
@@ -527,8 +519,7 @@ export function VikingBotAndCommunity() {
       <div className="ovp-kicker">native bot and q&a</div>
       <H3>VikingBot、提问环节和社区反馈</H3>
       <P>
-        原文后半段还展示了原生工具封装的 OpenViking VikingBot。它不是外部附加 demo，
-        而是以 OpenViking 为基础，把全部上下文能力封进一个可以直接提问的内嵌智能体。
+        VikingBot 是基于 OpenViking 的内嵌智能体，用自然语言测试资料接入、检索、摘要和阅读路径。
       </P>
 
       <Pre lang="bash" filename="vikingbot.sh">{`openviking-server --with-bot
@@ -551,7 +542,7 @@ ov observer vlm`}</Pre>
             <Ul marker="check">
               <Li>阅读代码、提 Issue 和问题反馈：<A href={OPENVIKING_REPO}>OpenViking GitHub</A>。</Li>
               <Li>完整技术文档：<A href={OPENVIKING_DOCS}>OpenViking 文档站</A>。</Li>
-              <Li>原文提到 LLM 学习季系列分享 Q&A 合集和 OpenViking 外部技术社区，用于持续收集问题与进展。</Li>
+              <Li>反馈通过 GitHub issue、讨论和文档更新持续收集。</Li>
             </Ul>
           </div>
         </Col>
@@ -559,8 +550,7 @@ ov observer vlm`}</Pre>
 
       <Callout type="tip" title="VikingBot 的定位">
         <P>
-          如果 OpenViking 是上下文数据库，VikingBot 就是一个直接证明接口可用性的 Agent。
-          它让团队能用自然语言检查资料接入、检索质量、摘要质量和上下文组织效果。
+          VikingBot 让团队直接用对话检查资料接入、检索质量、摘要质量和上下文组织效果。
         </P>
       </Callout>
     </section>
@@ -577,7 +567,7 @@ const wrapSections = {
         <Li>上下文数据规模越大，检索效率越高，自动化上限越高。</Li>
         <Li>每个高效率团队都应该配备自己的上下文数据库，实现全域信息集成。</Li>
         <Li>向量、文件系统、知识图谱、表格只是形式；Agent 需要趁手的数据交互接口。</Li>
-        <Li>OpenViking 定位是上下文数据库，面向 Agent 处理复杂信息的场景设计，not only 记忆组件。</Li>
+        <Li>OpenViking 定位是上下文数据库，面向 Agent 处理复杂信息的场景设计，不只是记忆组件。</Li>
         <Li>未来智能体能力的核心是上下文能力，包括知识、记忆、工具和组织方式。</Li>
       </Ul>
     ),
@@ -589,12 +579,10 @@ const wrapSections = {
     body: (
       <>
         <P>
-          公开文章不展开特定平台路线，而是保留更通用的产品方向：
-          OpenViking 当前适合先用本地或自托管服务验证，后续会继续增强云托管、分布式和稳定升级能力。
+          OpenViking 先适合本地或自托管验证，后续增强托管、分布式和稳定升级能力。
         </P>
         <P>
-          这部分信息的重点，是把上下文数据库从个人工具变成团队和组织级基础设施：
-          有部署规范、反馈入口、权限边界，也能接入现有检索和推荐底座。
+          目标是把上下文数据库从个人工具推进到团队基础设施：部署清晰、权限明确、可接入检索和推荐底座。
         </P>
       </>
     ),
@@ -625,10 +613,10 @@ export function CoreTakeawaysAndRoadmap() {
       <div className="ovp-kicker">wrap up</div>
       <H3>带走核心观点和后续规划</H3>
       <P>
-        原文结尾把观点收束到上下文数据库的组织价值，并给出社区、稳定性、多模态、记忆、技能检索和分布式能力的后续方向。
+        上下文数据库的价值会落到团队效率、标准、稳定性、多模态、记忆、技能检索和分布式能力上。
       </P>
 
-      <div className="ovp-tabs ovp-jumpbar" style={{ '--tone': active.tone }} aria-label="结尾内容快速跳转">
+      <div className="ovp-tabs ovp-localbar" style={{ '--tone': active.tone }} aria-label="结尾内容快速跳转">
         {wrapNavItems.map(item => (
           <button
             type="button"
@@ -658,7 +646,7 @@ export function CoreTakeawaysAndRoadmap() {
         ))}
       </div>
 
-      <Quote cite="OpenViking 分享原文">
+      <Quote cite="OpenViking mission">
         未来智能体能力的核心是上下文能力，OpenViking 的核心使命是推动智能体技术蓬勃发展。
       </Quote>
     </section>
@@ -671,8 +659,7 @@ export function AgentReadableContract() {
       <div className="ovp-kicker">human html and agent text</div>
       <H3>人读 HTML，Agent 读 llm.txt</H3>
       <P>
-        这篇文章需要同时服务两类读者：人类需要重新编排后的叙事、节奏和交互；
-        Agent 需要低噪声、可直接引用、并与中英文正文保持内容一致的 markdown。
+        HTML 服务人类阅读，llm.txt 服务 Agent 引用。两者应保持同一套公开内容。
       </P>
 
       <div className="ovp-route">
@@ -718,7 +705,7 @@ export function OpenVikingPracticeBlocks() {
     <>
       <PracticeBlockStyle />
       <Lead>
-        以下区块细化原文后半部分：从产品边界、长文档处理、团队落地，到 OpenClaw 记忆、VikingBot、结尾观点和 Agent 可读契约。
+        实践部分聚焦产品边界、长文档处理、团队落地、OpenClaw 记忆、VikingBot、结论和 Agent 可读契约。
       </Lead>
       <DatabaseComparison />
       <DocumentDecomposition />

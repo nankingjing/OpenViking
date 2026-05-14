@@ -324,16 +324,11 @@ table.ovx-matrix__table {
 }
 
 .ovx-sticky-tabs {
-  position: sticky;
-  top: var(--ovx-sticky-top);
-  z-index: 4;
   margin: 30px 0 18px;
   padding: 8px 0;
   border-top: 1px solid var(--th-line);
   border-bottom: 1px solid var(--th-line);
-  background: color-mix(in oklab, var(--th-bg) 94%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--th-bg);
 }
 
 .ovx-sticky-tabs__label {
