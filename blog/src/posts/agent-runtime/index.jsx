@@ -4,6 +4,44 @@ import {
   Ol, Li, Ul, A, InlineCode, Tag, Table,
 } from '../../blog-components';
 
+const LLM_PATH = '/post/agent-runtime/llm.txt';
+
+const STREAM_JSON_INPUT = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Say hi back in one sentence."}]}}`;
+
+const STREAM_JSON_OUTPUT = `{"type":"system","subtype":"init","session_id":"sess_demo_01","model":"claude-sonnet","tools":[]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hi! I am ready to help."}]}}
+{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","session_id":"sess_demo_01"}`;
+
+function StreamJsonDemo({ T }) {
+  return (
+    <details className="runtime-io-demo">
+      <summary>
+        <span className="runtime-io-demo__title">{T({
+          en: 'Expandable example: stdin JSON and stdout stream',
+          zh: '可展开演示：stdin 输入 JSON 与 stdout 输出流',
+        })}</span>
+        <span className="runtime-io-demo__hint">{T({ en: 'folded by default', zh: '默认折叠' })}</span>
+      </summary>
+      <div className="runtime-io-demo__body">
+        <P className="runtime-io-demo__intro">{T({
+          en: 'Write one NDJSON line to stdin. Claude then emits multiple JSON events on stdout; this sample is trimmed, so real events may include more fields.',
+          zh: '向 stdin 写入一行 NDJSON。Claude 会在 stdout 连续输出多条 JSON 事件；这里是精简示例，真实事件可能带更多字段。',
+        })}</P>
+        <div className="runtime-io-demo__grid">
+          <section className="runtime-io-demo__panel runtime-io-demo__panel--input">
+            <div className="runtime-io-demo__label">{T({ en: 'stdin input', zh: 'stdin 输入' })}</div>
+            <pre className="runtime-io-demo__code"><code>{STREAM_JSON_INPUT}</code></pre>
+          </section>
+          <section className="runtime-io-demo__panel runtime-io-demo__panel--output">
+            <div className="runtime-io-demo__label">{T({ en: 'stdout output stream', zh: 'stdout 输出流' })}</div>
+            <pre className="runtime-io-demo__code"><code>{STREAM_JSON_OUTPUT}</code></pre>
+          </section>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 const AgentRuntime = ({ t }) => {
   const T = t;
 
@@ -22,6 +60,8 @@ const AgentRuntime = ({ t }) => {
       })}</P>
 
       <Pre lang="bash" filename="terminal">{`claude --output-format stream-json --input-format stream-json --model sonnet`}</Pre>
+
+      <StreamJsonDemo T={T} />
 
       <P>{T({
         en: 'In Node.js, you spawn this as a child process and talk to it over stdin/stdout using NDJSON (newline-delimited JSON):',
@@ -110,8 +150,8 @@ send(proc2, "What is my secret code?");
       <H2 id="step-2">{T({ en: 'Step 2: Split Into Server and Daemon', zh: '第二步：拆分成 Server 和 Daemon' })}</H2>
 
       <P>{T({
-        en: 'A product needs network access. An agent needs local file access. Mixing the two is how you end up with browser tabs owning local shells. The fix: split into two processes connected by WebSocket.',
-        zh: '产品需要网络访问，agent 需要本地文件访问。把两者混在一起，就会变成浏览器标签页拥有本地 shell。解法：拆成两个进程，用 WebSocket 连接。',
+        en: 'The product owns users, permissions, message routing, and shared cloud resources. The agent needs local files, shell access, and tools. To let the agent use those cloud resources without putting local execution inside the web app, split the system: a cloud server coordinates, and a local daemon owns the agent process over WebSocket.',
+        zh: '云上产品负责用户、权限、消息路由和共享资源；本地 agent 需要访问文件、shell 和工具。要让 agent 使用这些云上资源，又不把本地执行能力塞进网页里，就把系统拆成两端：云上 server 负责协调，本地 daemon 负责启动 agent，并通过 WebSocket 收发任务和事件。',
       })}</P>
 
       <Pre lang="js" filename="1a_ws_server.js">{`// NO-AGENT SIDE — accepts a WebSocket connection from the daemon,
@@ -178,8 +218,8 @@ node 1a_ws_server.js
 node 1b_ws_daemon.js`}</Pre>
 
       <P>{T({
-        en: 'The server knows nothing about Claude. It sends text, receives events. The daemon knows nothing about the product. It owns the process and translates. This boundary is the entire architecture.',
-        zh: 'Server 对 Claude 一无所知——它发送文本，接收事件。Daemon 对产品一无所知——它管理进程并做翻译。这个边界就是整个架构。',
+        en: 'The server knows nothing about Claude. It sends product messages over WebSocket and receives runtime events back. The daemon does not need product semantics; it accepts WS messages, hands them to the matching agent process, and returns the output stream. This boundary is the entire architecture.',
+        zh: 'Server 对 Claude 一无所知——它通过 WebSocket 发送产品侧消息，接收运行时事件。Daemon 不需要理解产品语义；它只接收 WS 发来的消息/事件，交给对应 agent 进程处理，再把输出流回传。这个边界就是整个架构。',
       })}</P>
 
       <Hr ornament />
@@ -187,8 +227,8 @@ node 1b_ws_daemon.js`}</Pre>
       <H2 id="step-3">{T({ en: 'Step 3: Add Multi-Agent and MCP Tools', zh: '第三步：添加多 Agent 和 MCP 工具' })}</H2>
 
       <P>{T({
-        en: 'Raw stream-json events are Claude-specific. If you want to host multiple agents (possibly different runtimes), you need an envelope. And if agents need to interact with the world, they need tools — injected by the daemon at spawn time via MCP.',
-        zh: 'stream-json 事件是 Claude 特有的。如果你想托管多个 agent（甚至不同运行时），你需要一个信封协议。如果 agent 需要与外部世界交互，它需要工具——由 daemon 在启动时通过 MCP 注入。',
+        en: 'Raw stream-json events are Claude-specific. If you want to host multiple agents (possibly different runtimes), normalize them into one event shape: outer fields such as type, agentId, and entries tell the product how to route and display the event; the runtime-specific details stay inside. And if agents need to interact with the world, they need tools — injected by the daemon at spawn time via MCP.',
+        zh: 'stream-json 事件是 Claude 特有的。如果你想托管多个 agent（甚至不同运行时），先把它们转成同一种事件格式：外层字段说明事件类型、agentId 和内容列表，产品按这一层做路由和展示；各运行时自己的细节放在里面。agent 要和外部世界交互时，再由 daemon 在启动时通过 MCP 注入工具。',
       })}</P>
 
       <P>{T({
@@ -272,8 +312,8 @@ ws.on("message", (data) => {
 });`}</Pre>
 
       <P>{T({
-        en: 'The daemon also normalizes Claude\'s stream-json into a generic envelope — so the game server doesn\'t care whether it\'s Claude, Codex, or something else:',
-        zh: 'Daemon 还会将 Claude 的 stream-json 归一化为通用信封——这样游戏服务器不关心运行的是 Claude、Codex 还是别的什么：',
+        en: 'The daemon also normalizes Claude\'s stream-json into that shared event shape — so the game server doesn\'t care whether it\'s Claude, Codex, or something else:',
+        zh: 'Daemon 还会把 Claude 的 stream-json 归一化成这种统一事件格式——这样游戏服务器不关心运行的是 Claude、Codex 还是别的什么：',
       })}</P>
 
       <Pre lang="js" filename="normalizeAndEmit()">{`function normalizeAndEmit(agentId, ev) {
@@ -469,7 +509,7 @@ node 4b_chat_daemon.js
       <Ol>
         <Li><strong>{T({ en: 'Own the process', zh: '接管进程' })}</strong>{T({ en: ' — spawn Claude as a child, talk JSON over stdin/stdout. Save the session ID.', zh: '——以子进程方式启动 Claude，通过 stdin/stdout 传 JSON。保存 session ID。' })}</Li>
         <Li><strong>{T({ en: 'Split server and daemon', zh: '拆分 server 和 daemon' })}</strong>{T({ en: ' — server handles users and routing. Daemon handles the local process. WebSocket in between.', zh: '——server 处理用户和路由，daemon 处理本地进程，中间用 WebSocket 连接。' })}</Li>
-        <Li><strong>{T({ en: 'Normalize and inject tools', zh: '归一化并注入工具' })}</strong>{T({ en: ' — translate runtime events into a generic envelope. Give agents MCP tools to interact with the product.', zh: '——将运行时事件翻译成通用信封。通过 MCP 给 agent 注入与产品交互的工具。' })}</Li>
+        <Li><strong>{T({ en: 'Normalize and inject tools', zh: '归一化并注入工具' })}</strong>{T({ en: ' — translate runtime events into a shared product event shape. Give agents MCP tools to interact with the product.', zh: '——将运行时事件翻译成产品统一事件格式。通过 MCP 给 agent 注入与产品交互的工具。' })}</Li>
         <Li><strong>{T({ en: 'Add session resurrection', zh: '添加 session 复活' })}</strong>{T({ en: ' — kill idle processes, resume them on demand. The agent becomes serverless.', zh: '——杀掉空闲进程，按需恢复。Agent 变成无服务器的。' })}</Li>
       </Ol>
 
@@ -570,7 +610,7 @@ node 4b_chat_daemon.js
       <Ul>
         <Li><InlineCode>0_run_claude.js</InlineCode>{T({ en: ' — basic spawn + NDJSON communication', zh: '——基础启动 + NDJSON 通信' })}</Li>
         <Li><InlineCode>1a_ws_server.js</InlineCode> + <InlineCode>1b_ws_daemon.js</InlineCode>{T({ en: ' — WebSocket server/daemon split', zh: '——WebSocket server/daemon 拆分' })}</Li>
-        <Li><InlineCode>2a</InlineCode>/<InlineCode>2b</InlineCode>{T({ en: ' — envelope normalization (zouk protocol)', zh: '——信封归一化（zouk 协议）' })}</Li>
+        <Li><InlineCode>2a</InlineCode>/<InlineCode>2b</InlineCode>{T({ en: ' — event-shape normalization (zouk protocol)', zh: '——事件格式归一化（zouk 协议）' })}</Li>
         <Li><InlineCode>3a</InlineCode>/<InlineCode>3b</InlineCode>/<InlineCode>3c</InlineCode>{T({ en: ' — two-agent gomoku game with MCP tools', zh: '——双 agent 五子棋对弈 + MCP 工具' })}</Li>
         <Li><InlineCode>4a</InlineCode>/<InlineCode>4b</InlineCode>/<InlineCode>4c</InlineCode>{T({ en: ' — chat platform with session resurrection', zh: '——聊天平台 + session 复活' })}</Li>
         <Li><InlineCode>test_resume.js</InlineCode>{T({ en: ' — session resume proof', zh: '——session 恢复验证' })}</Li>
@@ -595,6 +635,7 @@ export default {
     category: { en: 'Engineering', zh: '工程' },
     tags: ['agent', 'daemon', 'mcp', 'claude-code'],
     languages: ['en', 'zh'],
+    llmPath: LLM_PATH,
     authors: [{ name: 'zayn', github: 'ZaynJarvis', role: { en: 'Engineer', zh: '工程师' } }],
   },
 };
