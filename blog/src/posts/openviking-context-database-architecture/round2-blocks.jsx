@@ -76,29 +76,49 @@ function Round2Styles() {
       }
       .ovarch2-stack {
         display: grid;
-        gap: 10px;
+        border-top: 1px solid var(--th-line);
       }
       .ovarch2-stack__row {
         display: grid;
-        grid-template-columns: minmax(126px, 0.7fr) minmax(0, 1.5fr) minmax(110px, 0.65fr);
-        gap: 10px;
-        align-items: stretch;
+        grid-template-columns: 44px minmax(112px, 0.72fr) minmax(0, 1.55fr) minmax(92px, 0.55fr);
+        gap: 14px;
+        align-items: baseline;
+        border-bottom: 1px solid var(--th-line);
+        padding: 14px 0;
       }
-      .ovarch2-stack__cell {
-        border: 1px solid var(--th-line);
-        border-left: 4px solid var(--tone);
-        border-radius: var(--r2-radius);
-        background: var(--th-bg);
-        padding: 12px;
+      .ovarch2-stack__index {
+        color: var(--th-mute);
+        font-family: var(--th-font-mono);
+        font-size: 12px;
+        line-height: 1.45;
       }
-      .ovarch2-stack__cell strong {
-        display: block;
-        margin-bottom: 6px;
+      .ovarch2-stack__layer {
         color: var(--th-ink);
         font-family: var(--th-font-display);
-        font-size: 16px;
+        font-size: 17px;
         font-weight: 600;
         line-height: 1.25;
+      }
+      .ovarch2-stack__role {
+        display: block;
+        color: var(--th-ink);
+        font-size: 15px;
+        line-height: 1.45;
+      }
+      .ovarch2-stack__contract {
+        display: block;
+        margin-top: 2px;
+        color: var(--th-mute);
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      .ovarch2-stack__marker {
+        justify-self: end;
+        color: var(--th-mute);
+        font-family: var(--th-font-mono);
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: nowrap;
       }
       .ovarch2-matrix {
         overflow-x: auto;
@@ -208,7 +228,17 @@ function Round2Styles() {
           display: grid;
         }
         .ovarch2-stack__row {
-          grid-template-columns: 1fr;
+          grid-template-columns: 34px minmax(0, 1fr);
+          gap: 4px 12px;
+          align-items: start;
+        }
+        .ovarch2-stack__body,
+        .ovarch2-stack__marker {
+          grid-column: 2;
+        }
+        .ovarch2-stack__marker {
+          justify-self: start;
+          margin-top: 2px;
         }
         .ovarch2-pipeline {
           grid-template-columns: 1fr;
@@ -243,28 +273,24 @@ function BlockShell({ t, kicker, title, children, aside }) {
 export function ArchitectureStack({ t }) {
   const layers = [
     {
-      tone: theme.blue,
       layer: tt(t, { en: 'Agent surface', zh: 'Agent 入口' }),
       role: tt(t, { en: 'CLI, SDK, MCP, Skills, VikingBot', zh: 'CLI、SDK、MCP、Skills、VikingBot' }),
       contract: tt(t, { en: 'Navigation commands and resource URIs', zh: '导航命令和资源 URI' }),
       marker: 'viking://...',
     },
     {
-      tone: theme.green,
       layer: tt(t, { en: 'OpenViking server', zh: 'OpenViking 服务层' }),
       role: tt(t, { en: 'Identity, jobs, parsers, metadata, telemetry', zh: '身份、任务、解析、元数据、遥测' }),
       contract: tt(t, { en: 'Coordinates reads, writes, retries, and isolation', zh: '协调读写、重试和隔离' }),
       marker: tt(t, { en: 'API + jobs', zh: 'API + 任务' }),
     },
     {
-      tone: theme.violet,
       layer: tt(t, { en: 'Context filesystem', zh: '上下文文件系统' }),
       role: tt(t, { en: 'AGFS/RAGFS, tree operations, summaries', zh: 'AGFS/RAGFS、树操作、摘要' }),
       contract: tt(t, { en: 'Turns context into paths agents can traverse', zh: '把上下文变成 Agent 可遍历路径' }),
       marker: 'ls/find/read',
     },
     {
-      tone: theme.gold,
       layer: tt(t, { en: 'Storage substrate', zh: '存储底座' }),
       role: tt(t, { en: 'VikingDB, embedded vectors, object/file storage', zh: 'VikingDB、内嵌向量、对象/文件存储' }),
       contract: tt(t, { en: 'Durability, retrieval, filters, and artifacts', zh: '持久化、检索、过滤和产物保存' }),
@@ -281,16 +307,14 @@ export function ArchitectureStack({ t }) {
     >
       <div className="ovarch2-stack">
         {layers.map((item, index) => (
-          <div className="ovarch2-stack__row" key={item.layer} style={{ '--tone': item.tone }}>
-            <div className="ovarch2-stack__cell">
-              <span className="ovarch2__mono">0{index + 1}</span>
-              <strong>{item.layer}</strong>
+          <div className="ovarch2-stack__row" key={item.layer}>
+            <div className="ovarch2-stack__index">0{index + 1}</div>
+            <div className="ovarch2-stack__layer">{item.layer}</div>
+            <div className="ovarch2-stack__body">
+              <span className="ovarch2-stack__role">{item.role}</span>
+              <span className="ovarch2-stack__contract">{item.contract}</span>
             </div>
-            <div className="ovarch2-stack__cell">
-              <strong>{item.role}</strong>
-              <span className="ovarch2__muted">{item.contract}</span>
-            </div>
-            <div className="ovarch2-stack__cell ovarch2__mono">{item.marker}</div>
+            <div className="ovarch2-stack__marker">{item.marker}</div>
           </div>
         ))}
       </div>
@@ -496,4 +520,3 @@ export function PrivacyIdentityFlow({ t }) {
     </BlockShell>
   );
 }
-

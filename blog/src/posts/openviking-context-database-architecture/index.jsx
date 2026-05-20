@@ -152,8 +152,8 @@ const OpenVikingArchitecturePost = ({ t }) => {
   return (
     <Article>
       <Lead>{T({
-        en: 'OpenViking is trying to make context feel less like prompt stuffing and more like database infrastructure: addressable, indexed, isolated, observable, and safe enough for agents to use repeatedly.',
-        zh: 'OpenViking 试图把上下文从“塞进 prompt 的材料”推进到真正的数据基础设施：可寻址、可索引、可隔离、可观测，并且足够安全，能让 Agent 反复使用。',
+        en: 'OpenViking starts from a plain problem: useful data exists, but agents still struggle to use it. A model needs an actor surface and a storage substrate; otherwise every task falls back to prompt stuffing.',
+        zh: 'OpenViking 从一个朴素问题出发：数据明明存在，Agent 却很难真正用起来。有模型之后，还需要 Actor 入口和存储底座；否则每个任务都会退回到临时塞 prompt。',
       })}</Lead>
 
       <Quote cite="Mike Stonebraker, April 2026">
@@ -164,19 +164,42 @@ const OpenVikingArchitecturePost = ({ t }) => {
       </Quote>
 
       <P dropCap>{T({
-        en: 'Agents need the right data substrate. They need to know where information lives, how far a search should expand, which memory belongs to whom, and whether a write is safe. OpenViking frames that substrate as a context database.',
-        zh: 'Agent 需要合适的数据底座：信息在哪里、检索应该扩到多深、记忆属于谁、写入是否安全。OpenViking 把这个底座定义成上下文数据库。',
+        en: 'The failure mode sits in the access plan around messy context: where to look, how far to search, which memory belongs to whom, and whether a write is safe. OpenViking frames that substrate as a context database.',
+        zh: '真正的失败点在复杂上下文的访问计划：在哪里找、检索扩到多深、记忆属于谁、写入是否安全。OpenViking 把这个底座定义成上下文数据库。',
       })}</P>
+
+      <H2>{T({ en: 'Why A Filesystem-Shaped Interface', zh: '为什么接口更像文件系统' })}</H2>
+      <P>{T({
+        en: 'Most agent context is not born as clean relational records. It is code, documents, PDFs, images, tickets, meetings, chat logs, calendars, and memories. Using it is closer to search and recommendation than to normal transaction processing: first shrink a noisy corpus into a plausible scope, then rank, read, and refine.',
+        zh: 'Agent 要用的上下文大多不是干净的关系型记录，而是代码、文档、PDF、图片、工单、会议、聊天记录、日历和记忆。使用这些数据更像搜索和推荐：先把巨大噪声集合压到一个可信范围，再排序、阅读和细化。',
+      })}</P>
+      <P>{T({
+        en: 'Relational databases remain useful for metadata, billing, jobs, and structured state. They are a poor primary interface for agents because the agent must first discover schemas, tables, joins, and valid predicates before it can even ask for context. A path is a much cheaper control primitive: choose this project, this user memory space, this document subtree, this time bucket, then search inside it.',
+        zh: '关系型数据库仍然适合元数据、计费、任务和结构化状态。但它不适合作为 Agent 读取上下文的主要入口，因为 Agent 必须先理解 schema、表、join 和合法谓词，才有机会开始找材料。路径是更低成本的控制原语：先限定这个项目、这个用户记忆空间、这个文档子树、这个时间桶，再在里面检索。',
+      })}</P>
+      <Table
+        headers={[
+          T({ en: 'Paradigm', zh: '范式' }),
+          T({ en: 'What it solves', zh: '解决什么' }),
+          T({ en: 'Where it breaks for agents', zh: 'Agent 使用时的断点' }),
+        ]}
+        rows={[
+          [T({ en: 'Relational schema', zh: '关系型 schema' }), T({ en: 'Precise operations over typed records.', zh: '对结构化记录做精确操作。' }), T({ en: 'The model must infer tables, joins, columns, and filters before retrieval starts.', zh: '模型要先推断表、连接、字段和过滤条件，检索还没开始就已经很重。' })],
+          [T({ en: 'Vector-only RAG', zh: '纯向量 RAG' }), T({ en: 'Semantic entry points over unstructured content.', zh: '为非结构化内容提供语义入口。' }), T({ en: 'As the corpus grows, embedding discrimination gets worse and small topK misses become fatal.', zh: '数据越多，向量区分度越容易退化；topK 很小时，一次漏召回就会直接失败。' })],
+          [T({ en: 'Scalar filters and rerankers', zh: '标量过滤和 rerank' }), T({ en: 'Useful narrowing and second-stage ordering.', zh: '提供有用的范围收敛和二阶段排序。' }), T({ en: 'They still need good candidate generation. A reranker cannot rescue evidence that never entered the candidate set, and it adds latency and cost.', zh: '它们仍依赖候选集质量。没有进入候选集的证据，rerank 救不回来；同时还会增加时延和成本。' })],
+          [T({ en: 'Directory semantics', zh: '目录语义' }), T({ en: 'One compact scope parameter before vector search and rerank.', zh: '在向量检索和 rerank 前，用一个紧凑参数限定范围。' }), T({ en: 'Ranking becomes more reliable after the search scope has already been narrowed.', zh: '先选定检索范围，再排序，候选集更小也更可靠。' })],
+        ]}
+      />
 
       <H2>{T({ en: 'The Shape Of The System', zh: '系统的整体形态' })}</H2>
       <P>{T({
-        en: 'The core is deliberately polyglot. Python owns the server because model calls, parsing, multimodal processing, and AI dependencies still live there. Rust owns distribution-sensitive surfaces such as the CLI and RAGFS. C++ carries the embedded vector database lineage from VikingDB.',
-        zh: 'OpenViking 的技术栈是有意拆开的：Python 承担服务端，因为模型调用、解析、多模态处理和 AI 依赖都在这个生态里；Rust 承担分发和吞吐敏感的 CLI、RAGFS；C++ 承接 VikingDB 的单机向量库能力。',
+        en: 'The implementation is deliberately polyglot. Python owns the server because parsing, document processing, multimodal understanding, model SDKs, and AI dependencies live there; OpenViking is IO- and data-pipeline heavy before it is CPU-bound. Rust owns distribution- and latency-sensitive surfaces such as the CLI and RAGFS, where startup time and binary delivery matter. C++ carries the embedded vector database lineage from VikingDB so the project can reuse mature indexing code instead of rewriting the hardest part.',
+        zh: 'OpenViking 的技术栈是有意拆开的。Python 承担服务端，因为解析、文档处理、多模态理解、模型 SDK 和 AI 依赖都在这个生态里；OpenViking 先是 IO 和数据链路密集，CPU 不是最先出现的瓶颈。Rust 承担分发和时延敏感的 CLI、RAGFS，启动速度和二进制交付都更合适。C++ 承接 VikingDB 的单机向量库能力，复用成熟索引实现，而不是重写最难的部分。',
       })}</P>
       <ArchitectureStack t={T} />
       <P>{T({
-        en: 'That split is not just an implementation detail. It keeps each layer honest about its contract: agents speak in commands and URIs, the server enforces identity and jobs, AGFS/RAGFS gives context a traversable shape, and VikingDB plus file storage decide what can be retrieved or persisted.',
-        zh: '这个拆分不只是实现细节，而是在约束每一层的责任：Agent 通过命令和 URI 说话，服务层负责身份和任务，AGFS/RAGFS 给上下文可遍历的形态，VikingDB 和文件存储决定什么能被检索和持久化。',
+        en: 'That split defines the contract of each layer: agents speak in commands and URIs, the server enforces identity and jobs, AGFS/RAGFS gives context a traversable shape, and VikingDB plus file storage decide what can be retrieved or persisted.',
+        zh: '这个拆分定义了每一层的责任：Agent 通过命令和 URI 说话，服务层负责身份和任务，AGFS/RAGFS 给上下文可遍历的形态，VikingDB 和文件存储决定什么能被检索和持久化。',
       })}</P>
       <Callout type="info">
         <P>{T({
@@ -189,23 +212,50 @@ const OpenVikingArchitecturePost = ({ t }) => {
 
       <H2 id="directory-semantics">{T({ en: 'Directory Semantics Are The Addressing Layer', zh: '目录语义是寻址层' })}</H2>
       <P>{T({
-        en: 'A large amount of useful context is already organized as a tree: code, calendars, wikis, books, shelves, service trees. VikingDB turned that observation into a path-aware vector index. OpenViking then uses `viking://` URIs to give agents a database namespace that feels familiar without pretending to be the local filesystem.',
-        zh: '大量有用上下文本来就是树：代码、日历、Wiki、图书、货架、服务树。VikingDB 把这个观察做成了路径感知向量索引。OpenViking 再用 `viking://` URI 给 Agent 一个熟悉但不等同于本地文件系统的数据库命名空间。',
+        en: 'Vector search has a scaling problem that matters more in RAG than in recommendation. Recommendation systems can recall thousands of candidates through multiple channels and then rely on coarse and fine ranking. An agent usually cannot pass thousands of chunks downstream. The final context window may only tolerate tens of chunks, and filling too much of it weakens the model before it starts reasoning.',
+        zh: '向量检索的规模问题，在 RAG 里比在推荐里更尖锐。推荐系统可以多路召回成千上万条候选，再做粗排和精排；Agent 通常不能把成千上万段内容交给下游。最终上下文窗口可能只容纳几十段，而且窗口填得太满，模型还没开始推理就已经变弱。',
       })}</P>
       <P>{T({
-        en: 'The important detail is that `path` is not stored as ordinary text. In VikingDB it is a `TYPE_PATH` index, so a query can choose a tree scope directly instead of scanning path strings as scalar metadata. Agents rarely ask for “any semantically similar thing anywhere.” They ask inside a project, a user memory space, a document subtree, or a service boundary.',
-        zh: '关键在于，`path` 不是普通文本字段。在 VikingDB 里它是 `TYPE_PATH` 索引，所以查询可以直接选择树形范围，而不是把路径字符串当作标量元数据去扫。Agent 很少需要“在所有地方找语义相似内容”，它更常在项目、用户记忆空间、文档子树或服务边界内检索。',
+        en: 'Scalar filters are the first answer: tenant, owner, time, level, source type, and similar fields should prune the search space. Directory retrieval is the more general answer. A lot of useful context is already organized as a tree: code, calendars, wikis, books, service trees, category taxonomies, and geographies. VikingDB turned that observation into a path-aware vector index, and OpenViking exposes it through `viking://` URIs.',
+        zh: '第一层答案是标量过滤：租户、归属人、时间、层级、来源类型等字段都应该先压缩检索范围。更通用的答案是目录检索。大量有用上下文本来就是树：代码、日历、Wiki、图书、服务树、类目体系和地理位置。VikingDB 把这个观察做成路径感知向量索引，OpenViking 再通过 `viking://` URI 暴露出来。',
+      })}</P>
+      <P>{T({
+        en: 'The important detail is that `path` is not stored as ordinary text. In VikingDB it is a `TYPE_PATH` index, so a query can choose a tree scope directly instead of scanning path strings as scalar metadata. That is what lowers filter-generation complexity for agents: one path plus a depth rule is much easier to produce than a hand-built predicate over unknown schema.',
+        zh: '关键在于，`path` 不是普通文本字段。在 VikingDB 里它是 `TYPE_PATH` 索引，所以查询可以直接选择树形范围，而不是把路径字符串当作标量元数据去扫。这才是目录语义降低 Agent 生成过滤条件复杂度的原因：一个路径加一个深度规则，远比在未知 schema 上手写谓词容易。',
+      })}</P>
+      <Pull>{T({
+        en: 'Directory semantics turn retrieval filtering into a scope-selection problem: choose a logical directory and depth, then search inside it. SQL-style filters require the agent to assemble schema, fields, joins, and predicates, which creates more room for invalid conditions.',
+        zh: '目录语义把检索过滤变成选择范围的简单过程：选定一个逻辑目录和深度，再在里面检索。SQL/Table 过滤要求 Agent 组装 schema、字段、join 和谓词，更容易生成无效条件。',
+      })}</Pull>
+      <Table
+        headers={[
+          T({ en: 'Directory feature', zh: '目录特性' }),
+          T({ en: 'Why prefix matching is not enough', zh: '为什么前缀匹配不够' }),
+        ]}
+        rows={[
+          [T({ en: 'Depth-aware retrieval', zh: '按深度检索' }), T({ en: 'A query must mean current node, direct children, or entire subtree without rewriting string predicates.', zh: '查询需要表达当前节点、直接子节点或整棵子树，而不是不断重写字符串谓词。' })],
+          [T({ en: 'Directory nodes can carry content', zh: '目录节点本身可以有内容' }), T({ en: 'A wiki page can have its own body and child pages. Treating directories as empty prefixes loses that case.', zh: 'Wiki 页面可以既有正文又有子页面。把目录只当空前缀，会丢掉这个场景。' })],
+          [T({ en: 'Multiple roots and facets', zh: '多根目录和多切面' }), T({ en: 'The same kind of corpus may need project, calendar, category, or geography views; each root is a search boundary.', zh: '同一类数据可能需要项目、日历、类目或地理视角；每个根目录都是检索边界。' })],
+          [T({ en: 'Index and permission boundary', zh: '索引和权限边界' }), T({ en: 'The path participates in retrieval, cache, update, and authorization behavior. It is not only a display string.', zh: '路径参与检索、缓存、更新和鉴权行为，不只是展示字符串。' })],
+        ]}
+      />
+
+      <H3>{T({ en: 'Multiple Roots Mean Multiple Logical Views', zh: '多根树意味着多个逻辑视图' })}</H3>
+      <P>{T({
+        en: 'A multi-root tree is not multiple physical copies of the same file. It means the same object can be indexed under several logical trees, and each tree is a different way to narrow retrieval before vector search. A document may live in the project resource tree, appear again in a calendar tree by creation time, and also be reachable through a category or geography tree if the domain needs that view.',
+        zh: '多根树不是把同一个文件复制到多个真实目录里，而是同一个对象可以被索引到多棵逻辑树下；每棵树都是向量检索前的一种范围压缩方式。一份文档可以在项目资源树里，也可以按创建时间出现在日历树里；如果业务需要，还可以通过类目树或地理树被访问。',
       })}</P>
       <Table
         headers={[
-          T({ en: 'Capability', zh: '能力' }),
-          T({ en: 'Why scalar filtering is not enough', zh: '为什么普通标量过滤不够' }),
+          T({ en: 'Root', zh: '根' }),
+          T({ en: 'What it organizes', zh: '按什么组织' }),
+          T({ en: 'Agent query it simplifies', zh: '它简化了什么查询' }),
         ]}
         rows={[
-          [T({ en: 'Depth-aware retrieval', zh: '按深度检索' }), T({ en: 'A directory query must mean current node, one level, or the entire subtree without rewriting every path predicate.', zh: '目录查询需要表达当前节点、一层或整棵子树，而不是为每个路径重写谓词。' })],
-          [T({ en: 'Multiple roots', zh: '多根目录' }), T({ en: 'Context lives under users, resources, memories, and tools; each root must remain a scope boundary.', zh: '上下文分布在用户、资源、记忆和工具下；每个根目录都应该是范围边界。' })],
-          [T({ en: 'Real-time updates', zh: '实时更新' }), T({ en: 'New files, moves, and deletes must be visible to retrieval without rebuilding the whole tree.', zh: '新文件、移动和删除应该进入检索视图，而不是重建整棵树。' })],
-          [T({ en: 'Per-level caches', zh: '分层缓存' }), T({ en: 'Agents often need overview first, detail later; cache boundaries should match the tree.', zh: 'Agent 往往先要概览，再要细节；缓存边界应该和树结构一致。' })],
+          [<InlineCode>viking://resources/...</InlineCode>, T({ en: 'Project, repository, document, or uploaded resource structure.', zh: '项目、仓库、文档或上传资源结构。' }), T({ en: 'Search inside this product, repo, folder, or knowledge base.', zh: '在这个产品、仓库、文件夹或知识库里找。' })],
+          [<InlineCode>viking://calendar/2026/05/...</InlineCode>, T({ en: 'Time buckets such as day, month, quarter, or year.', zh: '按日、月、季度、年份等时间桶组织。' }), T({ en: 'Search memories or materials from last week, this month, or a known incident date.', zh: '找上周、本月或某个事故日期附近的记忆和材料。' })],
+          [<InlineCode>viking://geo/cn/zhejiang/...</InlineCode>, T({ en: 'Geography such as country, province, city, or site.', zh: '按国家、省、市、站点等地理层级组织。' }), T({ en: 'Search policies, assets, or events inside a location boundary.', zh: '在某个地理边界内找政策、资产或事件。' })],
+          [<InlineCode>viking://category/infra/storage/...</InlineCode>, T({ en: 'Domain category, taxonomy, or service tree.', zh: '按业务类目、分类体系或服务树组织。' }), T({ en: 'Search within a topic without asking the model to infer category fields.', zh: '在某个主题内找，而不是让模型推断分类字段。' })],
         ]}
       />
 
@@ -225,8 +275,8 @@ const OpenVikingArchitecturePost = ({ t }) => {
       </Ul>
 
       <Pull>{T({
-        en: 'The path is not metadata after the fact. It is an indexable scope boundary.',
-        zh: '路径不是事后挂上的元数据，而是可索引的检索边界。',
+        en: 'The path is not metadata after the fact. It is an indexable scope boundary before vector search, rerank, and reading.',
+        zh: '路径不是事后挂上的元数据，而是在向量检索、rerank 和阅读之前生效的可索引范围边界。',
       })}</Pull>
 
       <H3>{T({ en: 'Progressive Disclosure For Context', zh: '上下文的渐进披露' })}</H3>
@@ -243,10 +293,35 @@ const OpenVikingArchitecturePost = ({ t }) => {
         ]}
       />
 
-      <H2>{T({ en: 'From Uploaded Files To Context Objects', zh: '从上传文件到上下文对象' })}</H2>
+      <H2>{T({ en: 'Files, Virtual URIs, And Multimodal Objects', zh: '文件、虚拟 URI 和多模态对象' })}</H2>
       <P>{T({
-        en: 'A single image upload shows why OpenViking is not just a filesystem facade. When `ov add-resource ./docs/images/grafana-demo-dashboard.png` runs, OpenViking creates a directory for that resource, stores the original image as L2, and generates L0 and L1 summaries so an agent can decide whether to inspect the full object. All three levels are embedded with multimodal models and written to the vector database.',
-        zh: '一次图片上传就能说明 OpenViking 不是文件系统外壳。执行 `ov add-resource ./docs/images/grafana-demo-dashboard.png` 时，OpenViking 会为这个资源创建目录，把原图作为 L2 保存，并生成 L0、L1 摘要，让 Agent 能先判断是否值得读取完整对象。三个层级都会经过多模态模型向量化并写入向量数据库。',
+        en: '`viking://` is a logical database namespace, not the physical storage path. The original source path can be preserved as provenance, while the physical AGFS/RAGFS or object-store key stays internal. The visible URI is chosen by the upload command, a user-specified parent path, or OpenViking defaults, and that URI links the stored object with rows in the vector index.',
+        zh: '`viking://` 是逻辑数据库命名空间，不是后端真实存储路径。原始来源路径可以作为来源信息保留，AGFS/RAGFS 或对象存储里的真实 key 则留在系统内部。展示给 Agent 的 URI 由上传命令、用户指定父目录或 OpenViking 默认规则决定，并用这个 URI 关联存储对象和向量索引记录。',
+      })}</P>
+      <Table
+        headers={[
+          T({ en: 'Path type', zh: '路径类型' }),
+          T({ en: 'Who sees it', zh: '谁会看到' }),
+          T({ en: 'Purpose', zh: '用途' }),
+        ]}
+        rows={[
+          [T({ en: 'Source path', zh: '来源路径' }), <InlineCode>./docs/images/grafana-demo-dashboard.png</InlineCode>, T({ en: 'Provenance: where the content came from.', zh: '来源追踪：内容最初从哪里来。' })],
+          [T({ en: 'Physical storage key', zh: '真实存储路径' }), T({ en: 'Internal only', zh: '只在系统内部使用' }), T({ en: 'Placement in local FS, AGFS/RAGFS, S3-like storage, or cache.', zh: '用于本地 FS、AGFS/RAGFS、S3 类存储或缓存中的真实落位。' })],
+          [T({ en: 'Canonical URI', zh: '规范 URI' }), <InlineCode>viking://resources/images/20260509/...</InlineCode>, T({ en: 'Stable identity for read, cite, permission, update, and delete.', zh: '用于读取、引用、鉴权、更新和删除的稳定身份。' })],
+          [T({ en: 'Matched view URI', zh: '命中视图 URI' }), <InlineCode>viking://calendar/2026/05/09/...</InlineCode>, T({ en: 'Explains which logical root made the result relevant; it may differ from the canonical URI.', zh: '解释结果是从哪棵逻辑树命中的；它可以不同于规范 URI。' })],
+        ]}
+      />
+      <P>{T({
+        en: 'When there is only one logical view, the canonical URI and matched URI are usually the same. With multiple roots, retrieval should show the matched view so the agent understands why the item appeared, while read and write operations still target the canonical URI.',
+        zh: '只有一个逻辑视图时，规范 URI 和命中 URI 通常相同；存在多根树时，检索结果应该展示命中视图，让 Agent 知道结果为什么出现，但读写操作仍然落到规范 URI 上。',
+      })}</P>
+      <P>{T({
+        en: 'Multimodality is a separate axis from directory semantics. Text, code, PDFs, and images all benefit from path-scoped retrieval. Images simply make the difference obvious: a query may hit the textual L0/L1 abstract, the image embedding for the L2 object, or both. The directory decides where to search; the modality-specific embeddings decide what is similar inside that scope.',
+        zh: '多模态和目录语义是两条轴，不应该混在一起。文本、代码、PDF 和图片都需要路径范围检索；图片只是更容易看出差异：一次查询可能命中 L0/L1 的文字摘要，也可能命中 L2 原图的 image embedding，或者两者都命中。目录决定在哪里搜，模态向量决定范围内什么相似。',
+      })}</P>
+      <P>{T({
+        en: 'For example, when `ov add-resource ./docs/images/grafana-demo-dashboard.png` runs, OpenViking creates a resource URI, stores the original image as L2, and generates L0 and L1 summaries so an agent can decide whether to inspect the full object.',
+        zh: '例如执行 `ov add-resource ./docs/images/grafana-demo-dashboard.png` 时，OpenViking 会生成资源 URI，把原图作为 L2 保存，并生成 L0、L1 摘要，让 Agent 先判断是否值得读取完整对象。',
       })}</P>
       <Pre lang="js" filename="add-image-resource.sh">{`ov add-resource ./docs/images/grafana-demo-dashboard.png
 
@@ -259,7 +334,7 @@ viking://resources/images/20260509/upload_321e98a827a0461f8721c683d726cbec_png`}
           T({ en: 'Agent value', zh: 'Agent 价值' }),
         ]}
         rows={[
-          [<InlineCode>grafana-demo-dashboard.png</InlineCode>, T({ en: 'L0 summary, L1 structure, L2 image', zh: 'L0 摘要、L1 结构、L2 图片' }), T({ en: 'Searchable before the full image is loaded.', zh: '不加载完整图片也能先被检索和判断。' })],
+          [<InlineCode>grafana-demo-dashboard.png</InlineCode>, T({ en: 'L0/L1 text abstracts plus L2 image embedding', zh: 'L0/L1 文字摘要，加 L2 图片向量' }), T({ en: 'Can be found through either abstract text or image similarity.', zh: '既可以通过文字摘要命中，也可以通过图片相似度命中。' })],
           [T({ en: 'Code repository file', zh: '代码仓库文件' }), T({ en: 'Original relative path preserved', zh: '保留原始相对路径' }), T({ en: 'Agents can navigate like code while retrieval stays semantic.', zh: 'Agent 能像读代码一样导航，同时保留语义检索。' })],
           [T({ en: 'Wiki or document subtree', zh: 'Wiki 或文档子树' }), T({ en: '`viking://` URI hierarchy', zh: '`viking://` URI 层级' }), T({ en: 'Search can stay inside the intended knowledge scope.', zh: '检索可以停留在预期知识范围内。' })],
         ]}
@@ -396,8 +471,8 @@ openviking privacy activate skill byted-viking-search-knowledgebase 2`}</Pre>
         zh: '这篇架构最核心的判断是：上下文不是一个 blob。它有路径、范围、身份、一致性约束、性能预算和隐私边界。OpenViking 的价值在于，让 Agent 通过一个自己已经会导航的接口来消费这些属性。',
       })}</P>
       <P>{T({
-        en: 'The architecture is still moving from concept to product construction. The open-source release has already produced enough usage, issues, and feedback to make capacity and performance the next hard priorities. The useful thing about the design is not that every consistency or latency question is closed; it is that OpenViking names the database properties context systems need to expose before agents can depend on them.',
-        zh: '这套架构仍在从概念走向产品化建设。开源发布已经带来了足够多的使用、issue 和反馈，让容量与性能成为下一阶段硬问题。这个设计的价值不在于所有一致性和时延问题都已经回答完，而在于它把 Agent 依赖上下文系统前必须暴露的数据库属性命名出来。',
+        en: 'The architecture is still moving from concept to product construction. The open-source release has already produced enough usage, issues, and feedback to make capacity and performance the next hard priorities. The useful thing about the design is that OpenViking names the database properties context systems need to expose before agents can depend on them, while keeping consistency and latency work visible.',
+        zh: '这套架构仍在从概念走向产品化建设。开源发布已经带来了足够多的使用、issue 和反馈，让容量与性能成为下一阶段硬问题。这个设计的价值是把 Agent 依赖上下文系统前必须暴露的数据库属性命名出来，同时把一致性和时延这些未完成问题留在明面上。',
       })}</P>
       <P>{T({
         en: 'The source note closes by thanking more than 150 contributors and participants, over 1000 merged changes, and a community that has pushed the project past 23k stars. That matters because the remaining questions are not slideware questions; they are the questions that show up when real agents, data, and users start sharing the same context substrate.',

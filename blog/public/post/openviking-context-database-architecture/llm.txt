@@ -6,9 +6,24 @@ Author: maojia
 
 ## Background
 
-Making data available to AI agents is still a hard infrastructure problem. The article starts from a practical observation attributed to Mike Stonebraker in April 2026: on a benchmark, large language models achieved 0% text-to-SQL accuracy; with RAG-style enhancements the result rose to around 10%; and when the prompt directly included the actual `FROM` clause, target tables, and join conditions, accuracy reached about 35%.
+Making data available to AI agents is still a hard infrastructure problem. OpenViking starts from a plain problem: useful data exists, but agents still struggle to use it. A model needs an actor surface and a storage substrate; otherwise every task falls back to prompt stuffing.
 
-The lesson is that models do not only need more text. They need data access, constraints, schemas, memory, and environment information in forms they can locate and use. OpenViking is positioned as a context database for AI agents. It uses database thinking as its core design paradigm, while choosing filesystem semantics as a NoSQL-style interface for agents.
+The article starts from a practical observation attributed to Mike Stonebraker in April 2026: on a benchmark, large language models achieved 0% text-to-SQL accuracy; with RAG-style enhancements the result rose to around 10%; and when the prompt directly included the actual `FROM` clause, target tables, and join conditions, accuracy reached about 35%.
+
+The lesson is about access planning around messy context: where to look, how far to search, which memory belongs to whom, and whether a write is safe. OpenViking is positioned as a context database for AI agents. It uses database thinking as its core design paradigm, while choosing filesystem semantics as the agent-facing navigation and scoping interface.
+
+Most agent context is not born as clean relational records. It is code, documents, PDFs, images, tickets, meetings, chat logs, calendars, and memories. Using it is closer to search and recommendation than to normal transaction processing: first shrink a noisy corpus into a plausible scope, then rank, read, and refine.
+
+Relational databases remain useful for metadata, billing, jobs, and structured state. They are a poor primary interface for agents because the agent must first discover schemas, tables, joins, and valid predicates before it can even ask for context. A path is a cheaper control primitive: choose a project, user memory space, document subtree, or time bucket, then search inside it.
+
+Design comparison:
+
+| Paradigm | What it solves | Where it breaks for agents |
+| --- | --- | --- |
+| Relational schema | Precise operations over typed records. | The model must infer tables, joins, columns, and filters before retrieval starts. |
+| Vector-only RAG | Semantic entry points over unstructured content. | As the corpus grows, embedding discrimination gets worse and small topK misses become fatal. |
+| Scalar filters and rerankers | Useful narrowing and second-stage ordering. | They still need good candidate generation. A reranker cannot rescue evidence that never entered the candidate set, and it adds latency and cost. |
+| Directory semantics | One compact scope parameter before vector search and rerank. | Ranking becomes more reliable after the search scope has already been narrowed. |
 
 The previous OpenViking article introduced why context engineering can be treated as a database problem. This architecture article goes deeper: addressing, directory semantics, distributed deployment, consistency, multi-tenancy, role and permission boundaries, privacy, security, capacity, performance, and evaluation.
 
@@ -18,9 +33,9 @@ Repository: https://github.com/volcengine/OpenViking
 
 OpenViking uses multiple implementation languages:
 
-- Python 3 implements the core server logic. This choice is driven by the Python ecosystem around model calls, multimodal understanding, content parsing, and AI dependencies. `uv` is used for environment management.
-- Rust implements the CLI and RAGFS. The CLI benefits from fast startup and easier distribution. RAGFS benefits from stronger IO parallelism and throughput.
-- C++ is used for the embedded single-machine vector database so OpenViking can reuse and trim mature VikingDB code.
+- Python 3 implements the core server logic. This choice is driven by the Python ecosystem around model calls, multimodal understanding, content parsing, document processing, and AI dependencies. OpenViking is IO- and data-pipeline heavy before it is CPU-bound.
+- Rust implements the CLI and RAGFS. The CLI benefits from fast startup and easier binary distribution. RAGFS benefits from stronger IO parallelism and throughput.
+- C++ is used for the embedded single-machine vector database so OpenViking can reuse and trim mature VikingDB indexing code.
 - GitHub CI builds and publishes across Windows, Linux, and macOS on AArch64 and x64, including PyPI binaries and Docker images.
 
 OpenViking exposes HTTP APIs and can be accessed through CLI, SDK, Skills, and MCP. The documentation entry point is https://docs.openviking.ai.
@@ -29,7 +44,9 @@ VikingBot is a secondary development of the nanobot project. It integrates OpenV
 
 ## Directory Semantics And Addressing
 
-VikingDB began exploring directory-node filtering in early 2025 while working on vector-scalar filtering. The team observed that many unstructured information systems are organized as directory structures: code repositories, calendars, books, wikis, shelves, service trees, and similar hierarchies.
+Vector search has a scaling problem that matters more in RAG than in recommendation. Recommendation systems can recall thousands of candidates through multiple channels and then rely on coarse and fine ranking. An agent usually cannot pass thousands of chunks downstream. The final context window may only tolerate tens of chunks, and filling too much of it weakens the model before it starts reasoning.
+
+Scalar filters are the first answer: tenant, owner, time, level, source type, and similar fields should prune the search space. Directory retrieval is the more general answer. VikingDB began exploring directory-node filtering in early 2025 while working on vector-scalar filtering. The team observed that many unstructured information systems are organized as directory structures: code repositories, calendars, books, wikis, shelves, service trees, category taxonomies, geographies, and similar hierarchies.
 
 VikingDB then designed directory-semantics algorithms, architecture, and interfaces. With the Viking DSL query language, a user can specify a directory as the retrieval scope. This gives O(1) scope selection over a directory tree rather than treating the path as ordinary scalar text.
 
@@ -50,7 +67,27 @@ The `path` field uses a `TYPE_PATH` index. The depth parameter controls scope:
 - `d=0`: match the current node itself.
 - `d=x`: search downward from the directory by `x` levels.
 
-Directory semantics are not just syntax sugar. They must support real-time updates, depth specification, per-level caches, multiple roots, and fast tree-scoped retrieval. This differs significantly from normal scalar filtering. The article states that VikingDB is currently the only vector database with a directory index structure, which gives OpenViking a strong foundation for a context database.
+Directory semantics turn retrieval filtering into a scope-selection problem: choose a logical directory and depth, then search inside it. SQL-style filters require the agent to assemble schema, fields, joins, and predicates, which creates more room for invalid conditions. One path plus a depth rule is much easier to produce than a hand-built predicate over unknown schema.
+
+Directory semantics are also not the same as prefix matching. They must support:
+
+- Depth-aware retrieval: current node, direct children, or entire subtree.
+- Directory nodes with their own content, such as wiki pages that also have child pages.
+- Multiple roots and facets, such as project, calendar, category, and geography views.
+- Index, cache, update, and authorization behavior attached to the path boundary.
+
+This differs significantly from normal scalar filtering. The article states that VikingDB is currently the only vector database with a directory index structure, which gives OpenViking a strong foundation for a context database.
+
+Multi-root trees are important. A multi-root tree is not multiple physical copies of the same file. It means the same object can be indexed under several logical trees, and each tree is a different way to narrow retrieval before vector search. A document may live in the project resource tree, appear again in a calendar tree by creation time, and also be reachable through a category or geography tree if the domain needs that view.
+
+Examples:
+
+| Root | What it organizes | Agent query it simplifies |
+| --- | --- | --- |
+| `viking://resources/...` | Project, repository, document, or uploaded resource structure. | Search inside this product, repo, folder, or knowledge base. |
+| `viking://calendar/2026/05/...` | Time buckets such as day, month, quarter, or year. | Search memories or materials from last week, this month, or a known incident date. |
+| `viking://geo/cn/zhejiang/...` | Geography such as country, province, city, or site. | Search policies, assets, or events inside a location boundary. |
+| `viking://category/infra/storage/...` | Domain category, taxonomy, or service tree. | Search within a topic without asking the model to infer category fields. |
 
 OpenViking then builds on this capability by exposing a filesystem-like context interface. To avoid confusing the database namespace with the local filesystem, OpenViking uses `viking://` URIs, for example:
 
@@ -66,12 +103,27 @@ Design rules:
 - L2 contains detailed information.
 - Every member in the database is treated as a file.
 - Every file is addressable by URI.
-- Every URI maps to an embedding vector.
+- Every URI links stored objects in AGFS/RAGFS with rows in the vector index.
 - OpenViking is not a filesystem. Uploaded files are parsed, processed, and transformed into AI-ready data.
 
 In VikingDB, each stored row contains a `path`-typed `uri` property. Other scalar fields remain available for common filtering needs.
 
 ## Example: Adding An Image
+
+`viking://` is a logical database namespace, not the physical storage path. The original source path can be preserved as provenance, while the physical AGFS/RAGFS or object-store key stays internal. The visible URI is chosen by the upload command, a user-specified parent path, or OpenViking defaults, and that URI links the stored object with rows in the vector index.
+
+The article separates four path concepts:
+
+| Path type | Who sees it | Purpose |
+| --- | --- | --- |
+| Source path | Example: `./docs/images/grafana-demo-dashboard.png` | Provenance: where the content came from. |
+| Physical storage key | Internal only | Placement in local FS, AGFS/RAGFS, S3-like storage, or cache. |
+| Canonical URI | Example: `viking://resources/images/20260509/...` | Stable identity for read, cite, permission, update, and delete. |
+| Matched view URI | Example: `viking://calendar/2026/05/09/...` | Explains which logical root made the result relevant; it may differ from the canonical URI. |
+
+When there is only one logical view, the canonical URI and matched URI are usually the same. With multiple roots, retrieval should show the matched view so the agent understands why the item appeared, while read and write operations still target the canonical URI.
+
+Multimodality is a separate axis from directory semantics. Text, code, PDFs, and images all benefit from path-scoped retrieval. Images simply make the difference obvious: a query may hit the textual L0/L1 abstract, the image embedding for the L2 object, or both. The directory decides where to search; modality-specific embeddings decide what is similar inside that scope.
 
 When an image is added with:
 
@@ -79,7 +131,7 @@ When an image is added with:
 ov add-resource ./docs/images/grafana-demo-dashboard.png
 ```
 
-OpenViking creates L0 and L1 summaries for agent readability and stores the image file as L2. L0, L1, and L2 are all processed by multimodal embedding models and written to the vector database.
+OpenViking creates L0 and L1 summaries for agent readability and stores the image file as L2. The image can be found through either abstract text or image similarity, depending on the query and model path.
 
 One image upload creates a directory containing only that image, for example:
 
