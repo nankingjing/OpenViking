@@ -326,6 +326,10 @@ class FeishuChannel(BaseChannel):
         reaction_register = getattr(builder, "register_p2_im_message_reaction_created_v1", None)
         if callable(reaction_register):
             builder = reaction_register(self._on_message_reaction_created_sync)
+            logger.info(
+                "Feishu reaction feedback enabled in SDK; make sure the app subscribes to "
+                "im.message.reaction.created_v1 in Feishu Open Platform"
+            )
         else:
             logger.warning(
                 "Current Feishu SDK does not expose register_p2_im_message_reaction_created_v1; "
@@ -755,13 +759,40 @@ class FeishuChannel(BaseChannel):
                 ("user_id",),
             )
 
+            logger.info(
+                "Feishu reaction event received: message_id={} emoji_type={} chat_id={} chat_type={} root_id={} operator_type={} user_id={}",
+                message_id,
+                emoji_type,
+                chat_id,
+                chat_type,
+                root_id,
+                operator_type,
+                user_id,
+            )
+
             if operator_type and operator_type != "user":
+                logger.info(
+                    "Ignoring Feishu reaction from non-user operator: operator_type={} message_id={}",
+                    operator_type,
+                    message_id,
+                )
                 return
             if not all(isinstance(value, str) and value for value in (message_id, emoji_type, user_id)):
+                logger.info(
+                    "Ignoring Feishu reaction with incomplete fields: message_id={} emoji_type={} user_id={}",
+                    message_id,
+                    emoji_type,
+                    user_id,
+                )
                 return
 
             feedback_type = self._reaction_feedback_type(emoji_type)
             if feedback_type is None:
+                logger.info(
+                    "Ignoring unsupported Feishu reaction emoji: emoji_type={} message_id={}",
+                    emoji_type,
+                    message_id,
+                )
                 return
 
             if not isinstance(chat_id, str) or not chat_id or not isinstance(chat_type, str) or not chat_type:
@@ -859,10 +890,32 @@ class FeishuChannel(BaseChannel):
                 continue
 
             if feedback_update is None:
+                logger.info(
+                    "Feishu reaction deduped for session={} message_id={} user_id={} feedback_type={}",
+                    session_key.safe_name(),
+                    platform_message_id,
+                    user_id,
+                    feedback_type,
+                )
                 return
 
+            logger.info(
+                "Feishu reaction stored for session={} message_id={} user_id={} feedback_type={}",
+                session_key.safe_name(),
+                platform_message_id,
+                user_id,
+                feedback_type,
+            )
             await self._publish_reaction_feedback_update(session, feedback_update)
             return
+
+        logger.info(
+            "Feishu reaction could not be matched to a session by chat context: chat_id={} chat_type={} root_id={} message_id={}",
+            chat_id,
+            chat_type,
+            root_id,
+            platform_message_id,
+        )
 
     async def _submit_reaction_feedback_by_message_id(
         self,
@@ -898,10 +951,31 @@ class FeishuChannel(BaseChannel):
                 continue
 
             if feedback_update is None:
+                logger.info(
+                    "Feishu reaction deduped by message lookup for session={} message_id={} user_id={} feedback_type={}",
+                    session_key.safe_name(),
+                    platform_message_id,
+                    user_id,
+                    feedback_type,
+                )
                 return
 
+            logger.info(
+                "Feishu reaction stored by message lookup for session={} message_id={} user_id={} feedback_type={}",
+                session_key.safe_name(),
+                platform_message_id,
+                user_id,
+                feedback_type,
+            )
             await self._publish_reaction_feedback_update(session, feedback_update)
             return
+
+        logger.info(
+            "Feishu reaction could not be matched to any session by message lookup: message_id={} user_id={} feedback_type={}",
+            platform_message_id,
+            user_id,
+            feedback_type,
+        )
 
     async def _publish_reaction_feedback_update(
         self,
