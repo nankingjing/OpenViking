@@ -67,9 +67,24 @@ const LIST_OPTS = {
   nodeLimit: 200,
 }
 
-function sortEntries(entries: VikingFsEntry[]): VikingFsEntry[] {
+function isSessionSubtree(parentUri: string): boolean {
+  // Children of viking://session and anything nested inside it sort by
+  // modTime DESC (most recent first) instead of name.
+  return parentUri.startsWith('viking://session/')
+}
+
+function sortEntries(
+  entries: VikingFsEntry[],
+  parentUri: string,
+): VikingFsEntry[] {
+  const byModTime = isSessionSubtree(parentUri)
   return [...entries].sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+    if (byModTime) {
+      const at = a.modTimestamp ?? 0
+      const bt = b.modTimestamp ?? 0
+      if (at !== bt) return bt - at
+    }
     return a.name.localeCompare(b.name)
   })
 }
@@ -96,7 +111,7 @@ function TreeNode({
 
   const { data } = useVikingFsList(entry.uri, LIST_OPTS, entry.isDir)
   const children: VikingFsEntry[] = entry.isDir
-    ? sortEntries(data?.entries ?? [])
+    ? sortEntries(data?.entries ?? [], entry.uri)
     : []
 
   const handleToggle = useCallback(() => {
@@ -108,10 +123,11 @@ function TreeNode({
   const handleSelect = useCallback(() => {
     if (entryRef.current.isDir) {
       onSelectDirectory(entryRef.current)
+      handleToggle()
     } else {
       onSelectFile?.(entryRef.current)
     }
-  }, [onSelectDirectory, onSelectFile])
+  }, [onSelectDirectory, onSelectFile, handleToggle])
 
   const handleMouseEnter = useCallback(() => {
     if (entry.isDir && !isOpen && prefetch) prefetch(entry.uri)

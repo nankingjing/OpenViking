@@ -68,7 +68,24 @@ export function ContextCommitsPanel({
   useEffect(() => {
     const el = heatmapScrollRef.current
     if (!el) return
-    el.scrollLeft = el.scrollWidth
+    // Wait one frame for HeatMap to lay out, then align the viewport's
+    // right edge with the rightmost rendered cell (not the SVG's trailing
+    // padding). Finds the last <rect> on the heatmap to compute the
+    // actual content edge.
+    const raf = requestAnimationFrame(() => {
+      const node = heatmapScrollRef.current
+      if (!node) return
+      const rects = node.querySelectorAll<SVGRectElement>('svg rect')
+      let cellsRight = node.scrollWidth
+      if (rects.length > 0) {
+        const last = rects[rects.length - 1]
+        const bbox = last.getBoundingClientRect()
+        const containerLeft = node.getBoundingClientRect().left
+        cellsRight = bbox.right - containerLeft + node.scrollLeft
+      }
+      node.scrollLeft = Math.max(0, cellsRight - node.clientWidth)
+    })
+    return () => cancelAnimationFrame(raf)
   }, [items])
   const panelColors = useMemo(() => buildHeatmapPanelColors(items), [items])
   const totalCommits = useMemo(

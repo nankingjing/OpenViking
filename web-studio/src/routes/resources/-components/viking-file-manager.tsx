@@ -402,7 +402,7 @@ export function VikingFileManager({
 
   const toolbar = (
     <div className="flex h-10 items-center gap-1 border-b px-3">
-      <nav className="flex items-center gap-0.5 overflow-hidden text-xs text-muted-foreground md:text-sm">
+      <nav className="flex flex-1 items-center gap-0.5 overflow-x-auto whitespace-nowrap text-xs text-muted-foreground md:text-sm">
         {breadcrumbs.map((crumb, i) => (
           <span key={crumb.uri} className="flex shrink-0 items-center gap-0.5">
             {i > 0 && <ChevronRight className="size-3" />}
