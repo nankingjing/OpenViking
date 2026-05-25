@@ -108,6 +108,9 @@ class OpenVikingBuildExt(build_ext):
     def run(self):
         self.build_ov_cli_artifact()
         self.build_ragfs_python_artifact()
+        if self._skip_engine_build():
+            print("[OK] Skipping vectordb engine CMake build (OV_SKIP_CPP_BUILD=1)")
+            return
         self.cmake_executable = CMAKE_PATH
 
         for ext in self.extensions:
@@ -390,6 +393,25 @@ class OpenVikingBuildExt(build_ext):
         if required is not None:
             return required == "1"
         return "bdist_wheel" in sys.argv
+
+    def _should_require_engine_artifact(self) -> bool:
+        """Fail wheel builds closed when vectordb engine binaries are missing."""
+        required = os.environ.get("OV_REQUIRE_ENGINE_BUILD")
+        if required is not None:
+            return required == "1"
+        return "bdist_wheel" in sys.argv
+
+    def _skip_engine_build(self) -> bool:
+        """Allow local/dev installs to bypass the CMake C++ engine build."""
+        if os.environ.get("OV_SKIP_CPP_BUILD") != "1":
+            return False
+
+        if self._should_require_engine_artifact():
+            raise RuntimeError(
+                "OV_SKIP_CPP_BUILD=1 is incompatible with required wheel artifacts. "
+                "Unset OV_SKIP_CPP_BUILD or set OV_REQUIRE_ENGINE_BUILD=0 for non-release builds."
+            )
+        return True
 
     def build_extension(self, ext):
         """Build a single Python native extension artifact using CMake."""
