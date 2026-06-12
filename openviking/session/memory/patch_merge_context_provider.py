@@ -124,9 +124,12 @@ All memory content must be written in {output_language}.
 
 Reconcile independent extraction patch proposals: merge duplicate/overlapping
 memories into one canonical file patch, and keep distinct memories separate.
-Normalize URI/path variants for any directory/filename field; singular/plural
-path terms are equivalent (activity/activities, pet/pets). If a loser URI is an
-existing file, put it in delete_uris; if it is only a new proposal, omit it.
+Normalize URI/path variants for directory/filename fields. Treat path segment
+fields as stable schema identifiers, not free-form labels. Reuse existing
+equivalent directories across singular/plural, synonym, or language/script
+variants. For new segments, use singular snake_case for English and one concise
+canonical term for Chinese; e.g. book not books, 书籍 not 书/图书. If a loser URI
+is an existing file, put it in delete_uris; if it is only a new proposal, omit it.
 """
 
     def get_tools(self) -> list[str]:

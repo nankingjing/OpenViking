@@ -198,11 +198,12 @@ def test_patch_merge_context_provider_instruction_mentions_path_field_normalizat
 
     assert "independent extraction patch proposals" in instruction
     assert "merge duplicate/overlapping\nmemories into one canonical file patch" in instruction
-    assert "any directory/filename field" in instruction
-    assert "singular/plural\npath terms are equivalent" in instruction
+    assert "directory/filename fields" in instruction
+    assert "schema identifiers" in instruction
+    assert "book not books" in instruction
+    assert "Chinese" in instruction
+    assert "书籍 not 书/图书" in instruction
     assert "put it in delete_uris" in instruction
-    assert "activity/activities" in instruction
-    assert "pet/pets" in instruction
 
 
 def test_patch_merge_context_provider_detects_language_from_patch_content(monkeypatch):
