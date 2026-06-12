@@ -240,3 +240,29 @@ def test_patch_merge_context_provider_empty_patches_fallback_to_english(monkeypa
     )
 
     assert provider.get_output_language() == "en"
+
+
+def test_patch_merge_context_provider_ignores_before_file_language(monkeypatch):
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    provider = PatchMergeContextProvider(
+        memory_type="preferences",
+        required_file_uris=[],
+        patches=[
+            PatchMergePatch(
+                before_file=MemoryFile(
+                    uri="viking://user/u/memories/preferences/old.md",
+                    content="用户偏好简洁实现。",
+                    memory_type="preferences",
+                    extra_fields={"memory_type": "preferences", "topic": "代码风格"},
+                ),
+                after_file=MemoryFile(
+                    uri="viking://user/u/memories/preferences/old.md",
+                    content="User prefers concise implementation.",
+                    memory_type="preferences",
+                    extra_fields={"memory_type": "preferences", "topic": "code_style"},
+                ),
+            )
+        ],
+    )
+
+    assert provider.get_output_language() == "en"

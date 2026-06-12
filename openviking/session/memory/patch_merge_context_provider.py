@@ -66,8 +66,6 @@ def _patch_language_text(patches: list[PatchMergePatch]) -> str:
     parts: list[str] = []
     for patch in patches:
         parts.extend(_memory_file_language_text(patch.after_file))
-        if patch.before_file is not None:
-            parts.extend(_memory_file_language_text(patch.before_file))
     return "\n".join(part for part in parts if part)
 
 
