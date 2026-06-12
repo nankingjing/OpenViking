@@ -15,6 +15,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 _INTERNAL_MEMORY_TYPES = {"session_skills"}
+_SELF_PEER_ID = "__self"
 
 
 @dataclass
@@ -62,20 +63,25 @@ class MemoryIsolationHandler:
         messages = getattr(self._extract_context, "messages", None)
         return messages if isinstance(messages, list) else []
 
-    def _has_self_user_message(self) -> bool:
-        for msg in self._messages():
-            if getattr(msg, "role", None) != "user":
-                continue
-            if safe_peer_id(getattr(msg, "peer_id", None)) is None:
-                return True
-        return False
-
-    def _first_peer_id_in_messages(self) -> Optional[str]:
-        for msg in self._messages():
-            peer_id = safe_peer_id(getattr(msg, "peer_id", None))
-            if peer_id and self._can_write_peer(peer_id):
-                return peer_id
+    def _message_target_id(self, msg: Any) -> Optional[str]:
+        raw_peer_id = getattr(msg, "peer_id", None)
+        peer_id = safe_peer_id(raw_peer_id)
+        if peer_id and self._can_write_peer(peer_id):
+            return peer_id
+        if raw_peer_id in (None, "") and self.allow_self:
+            return _SELF_PEER_ID
         return None
+
+    def _first_target_id_in_messages(self) -> Optional[str]:
+        targets = [
+            target_id
+            for msg in self._messages()
+            if (target_id := self._message_target_id(msg))
+        ]
+        for target_id in targets:
+            if target_id != _SELF_PEER_ID:
+                return target_id
+        return targets[0] if targets else None
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
@@ -101,7 +107,7 @@ class MemoryIsolationHandler:
         item_dict.pop("user_ids", None)
 
         peer_id = safe_peer_id(item_dict.get("peer_id"))
-        if peer_id:
+        if peer_id and peer_id != _SELF_PEER_ID:
             item_dict["peer_id"] = peer_id
         else:
             item_dict.pop("peer_id", None)
@@ -138,27 +144,35 @@ class MemoryIsolationHandler:
             )
         return directories
 
-    def _range_targets(self, ranges: Any) -> tuple[bool, List[str]]:
+    def _range_targets(self, ranges: Any) -> List[str]:
         if not ranges or not self._extract_context:
-            return False, []
+            return []
         try:
             msg_range = self._extract_context.read_message_ranges(str(ranges))
         except Exception:
             logger.warning("Failed to parse memory ranges for peer routing: %s", ranges)
-            return False, []
+            return []
 
-        include_self = False
-        peer_ids = set()
+        target_ids = []
         for msg_group in getattr(msg_range, "elements", []) or []:
             for msg in msg_group:
-                raw_peer_id = getattr(msg, "peer_id", None)
-                peer_id = safe_peer_id(raw_peer_id)
-                if peer_id:
-                    if self._can_write_peer(peer_id):
-                        peer_ids.add(peer_id)
-                elif self.allow_self:
-                    include_self = True
-        return include_self, sorted(peer_ids)
+                target_id = self._message_target_id(msg)
+                if target_id:
+                    target_ids.append(target_id)
+        return list(dict.fromkeys(target_ids))
+
+    def _resolve_operation_target_id(self, raw_peer_id: Any) -> Optional[str]:
+        peer_id = safe_peer_id(raw_peer_id)
+        if peer_id == _SELF_PEER_ID and self.allow_self:
+            return _SELF_PEER_ID
+        if peer_id and self._can_write_peer(peer_id):
+            return peer_id
+        fallback_target_id = self._first_target_id_in_messages()
+        if fallback_target_id:
+            return fallback_target_id
+        if self.allow_self:
+            return _SELF_PEER_ID
+        return None
 
     def calculate_memory_uris(
         self,
@@ -175,53 +189,50 @@ class MemoryIsolationHandler:
         user_id = self.ctx.user.user_id
         operation.memory_fields["user_id"] = user_id
 
-        peer_ids_to_write: List[str] = []
-        include_self = False
-
+        target_ids: List[str] = []
+        has_ranges = operation.memory_fields.get("ranges") is not None
         if operation.memory_fields.get("ranges") is not None:
-            include_self, peer_ids_to_write = self._range_targets(
+            target_ids = self._range_targets(
                 operation.memory_fields.get("ranges"),
             )
             operation.memory_fields.pop("peer_id", None)
         else:
-            raw_peer_id = operation.memory_fields.get("peer_id")
-            peer_id = safe_peer_id(raw_peer_id)
-            if peer_id and self._can_write_peer(peer_id):
-                peer_ids_to_write = [peer_id]
-                operation.memory_fields["peer_id"] = peer_id
+            target_id = self._resolve_operation_target_id(
+                operation.memory_fields.get("peer_id"),
+            )
+            if target_id:
+                target_ids = [target_id]
+            if target_id == _SELF_PEER_ID:
+                operation.memory_fields.pop("peer_id", None)
+            elif target_id:
+                operation.memory_fields["peer_id"] = target_id
             else:
                 operation.memory_fields.pop("peer_id", None)
-                fallback_peer_id = self._first_peer_id_in_messages()
-                if fallback_peer_id:
-                    peer_ids_to_write = [fallback_peer_id]
-                    operation.memory_fields["peer_id"] = fallback_peer_id
-                elif self.allow_self:
-                    include_self = True
 
-        if not include_self and not peer_ids_to_write:
+        if not target_ids:
             return []
 
         # 文件
         uris = set()
         user_space = user_id
-        if include_self:
+        base_fields = dict(operation.memory_fields)
+        for target_id in target_ids:
+            fields = dict(base_fields)
+            if target_id == _SELF_PEER_ID:
+                target_user_space = user_space
+                fields.pop("peer_id", None)
+            else:
+                target_user_space = peer_user_space(user_space, target_id)
+                fields["peer_id"] = target_id
             uris.add(
                 generate_uri(
                     memory_type=memory_type_schema,
-                    fields=operation.memory_fields,
-                    user_space=user_space,
-                    extract_context=extract_context,
-                )
-            )
-        for peer_id in peer_ids_to_write:
-            target_user_space = peer_user_space(user_space, peer_id)
-            uris.add(
-                generate_uri(
-                    memory_type=memory_type_schema,
-                    fields=operation.memory_fields,
+                    fields=fields,
                     user_space=target_user_space,
                     extract_context=extract_context,
                 )
             )
 
+        if has_ranges:
+            operation.memory_fields.pop("peer_id", None)
         return list(uris)
