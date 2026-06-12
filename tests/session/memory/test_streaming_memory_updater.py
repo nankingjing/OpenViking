@@ -727,7 +727,7 @@ def test_render_operation_after_file_content_persists_source_trace_id():
 
 
 @pytest.mark.asyncio
-async def test_cross_extraction_merge_deletes_existing_loser_uri(monkeypatch):
+async def test_cross_extraction_merge_preserves_existing_uri_without_explicit_delete(monkeypatch):
     existing_uri = "viking://user/u/memories/notes/existing.md"
     winner_uri = "viking://user/u/memories/notes/winner.md"
     old_file = __import__(
@@ -793,7 +793,7 @@ async def test_cross_extraction_merge_deletes_existing_loser_uri(monkeypatch):
     )
 
     assert [op.uris for op in merged.upsert_operations] == [[winner_uri]]
-    assert [file.uri for file in merged.delete_file_contents] == [existing_uri]
+    assert merged.delete_file_contents == []
 
 
 @pytest.mark.asyncio

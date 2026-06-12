@@ -869,34 +869,6 @@ async def merge_one_memory_type_operations(
     )
     merged, _ = await orchestrator.run()
     merged = merged or ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
-    existing_input_uris = {
-        uri
-        for op in operations
-        if getattr(op, "old_memory_file_content", None) is not None
-        for uri in (op.uris or [])
-        if uri
-    }
-    output_upsert_uris = {
-        uri for op in (merged.upsert_operations or []) for uri in (op.uris or []) if uri
-    }
-    missing_delete_uris = sorted(existing_input_uris - output_upsert_uris)
-    if missing_delete_uris:
-        existing_by_uri = {
-            uri: getattr(op, "old_memory_file_content", None)
-            for op in operations
-            for uri in (op.uris or [])
-            if getattr(op, "old_memory_file_content", None) is not None
-        }
-        existing_delete_uris = {
-            file.uri for file in (merged.delete_file_contents or []) if getattr(file, "uri", None)
-        }
-        for uri in missing_delete_uris:
-            if uri in existing_delete_uris:
-                continue
-            old_file = existing_by_uri.get(uri)
-            if old_file is not None:
-                merged.delete_file_contents.append(old_file)
-                existing_delete_uris.add(uri)
     tracer.info(
         "[streaming_memory_updater] llm merge output "
         f"memory_type={memory_type} upserts={len(merged.upsert_operations)} "
