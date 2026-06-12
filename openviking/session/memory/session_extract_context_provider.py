@@ -496,8 +496,16 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         tool = get_tool(tool_call.name)
         if not tool:
             return {"error": f"Unknown tool: {tool_call.name}"}
-        tracer.info(f"tool_call.arguments={tool_call.arguments}")
         result = await tool.execute(self.create_tool_context(), **tool_call.arguments)
+        if (
+            tool_call.name == "read"
+            and isinstance(result, dict)
+            and result.get("error")
+            and str(result["error"]).startswith("File not found")
+        ):
+            tracer.info(f"tool_call.arguments={tool_call.arguments} read not found")
+        else:
+            tracer.info(f"tool_call.arguments={tool_call.arguments}")
         return result
 
     def get_tools(self) -> List[str]:

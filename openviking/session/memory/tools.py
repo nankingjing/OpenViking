@@ -216,7 +216,6 @@ class MemoryReadTool(MemoryTool):
                 )
             return llm_result
         except NotFoundError as e:
-            tracer.info(f"read not found: {uri}")
             return {"error": str(e)}
         except Exception as e:
             tracer.error(f"Failed to execute read: {e}")
