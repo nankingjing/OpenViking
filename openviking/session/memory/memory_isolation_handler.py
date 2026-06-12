@@ -186,24 +186,17 @@ class MemoryIsolationHandler:
         else:
             raw_peer_id = operation.memory_fields.get("peer_id")
             peer_id = safe_peer_id(raw_peer_id)
-            if raw_peer_id and not peer_id:
-                return []
-            if peer_id:
-                if not self._can_write_peer(peer_id):
-                    return []
+            if peer_id and self._can_write_peer(peer_id):
                 peer_ids_to_write = [peer_id]
                 operation.memory_fields["peer_id"] = peer_id
             else:
                 operation.memory_fields.pop("peer_id", None)
-                if self.allow_self and self._has_self_user_message():
+                fallback_peer_id = self._first_peer_id_in_messages()
+                if fallback_peer_id:
+                    peer_ids_to_write = [fallback_peer_id]
+                    operation.memory_fields["peer_id"] = fallback_peer_id
+                elif self.allow_self:
                     include_self = True
-                else:
-                    fallback_peer_id = self._first_peer_id_in_messages()
-                    if fallback_peer_id:
-                        peer_ids_to_write = [fallback_peer_id]
-                        operation.memory_fields["peer_id"] = fallback_peer_id
-                    elif self.allow_self:
-                        include_self = True
 
         if not include_self and not peer_ids_to_write:
             return []

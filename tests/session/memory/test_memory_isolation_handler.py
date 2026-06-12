@@ -413,9 +413,18 @@ class TestCalculateMemoryUris:
         assert "peer_id" not in operation.memory_fields
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
-    def test_calculate_memory_uris_rejects_unallowed_peer_id(self, mock_generate_uri):
+    def test_calculate_memory_uris_unallowed_peer_id_falls_back_to_first_peer(
+        self, mock_generate_uri
+    ):
+        mock_generate_uri.side_effect = lambda **kwargs: (
+            f"viking://user/{kwargs.get('user_space')}/memories/preferences"
+        )
+
         ctx = create_ctx(user_id="support_bot")
-        messages = [create_message("user", peer_id="web:visitor:alice")]
+        messages = [
+            create_message("user", peer_id="web:visitor:bob"),
+            create_message("user", peer_id="web:visitor:alice"),
+        ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(
             ctx,
@@ -439,11 +448,13 @@ class TestCalculateMemoryUris:
 
         uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
 
-        assert uris == []
-        mock_generate_uri.assert_not_called()
+        assert uris == [
+            "viking://user/support_bot/peers/web:visitor:bob/memories/preferences"
+        ]
+        assert operation.memory_fields["peer_id"] == "web:visitor:bob"
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
-    def test_calculate_memory_uris_missing_peer_id_prefers_self_when_self_user_message_exists(
+    def test_calculate_memory_uris_missing_peer_id_prefers_first_peer_even_when_self_exists(
         self, mock_generate_uri
     ):
         mock_generate_uri.side_effect = lambda **kwargs: (
@@ -480,9 +491,11 @@ class TestCalculateMemoryUris:
 
         uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
 
-        assert uris == ["viking://user/support_bot/memories/preferences"]
+        assert uris == [
+            "viking://user/support_bot/peers/web:visitor:alice/memories/preferences"
+        ]
         assert operation.memory_fields["user_id"] == "support_bot"
-        assert "peer_id" not in operation.memory_fields
+        assert operation.memory_fields["peer_id"] == "web:visitor:alice"
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_calculate_memory_uris_missing_peer_id_falls_back_to_first_peer_when_self_absent(
@@ -526,4 +539,42 @@ class TestCalculateMemoryUris:
             "viking://user/support_bot/peers/web:visitor:bob/memories/preferences"
         ]
         assert operation.memory_fields["user_id"] == "support_bot"
+        assert operation.memory_fields["peer_id"] == "web:visitor:bob"
+
+    @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
+    def test_calculate_memory_uris_invalid_peer_id_falls_back_to_first_peer(
+        self, mock_generate_uri
+    ):
+        mock_generate_uri.side_effect = lambda **kwargs: (
+            f"viking://user/{kwargs.get('user_space')}/memories/preferences"
+        )
+
+        ctx = create_ctx(user_id="support_bot")
+        messages = [create_message("user", peer_id="web:visitor:bob")]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allowed_peer_ids={"web:visitor:bob"},
+        )
+
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        schema = MemoryTypeSchema(
+            memory_type="preferences",
+            filename_template="preferences.md",
+            directory="viking://user/{user_space}/memories",
+        )
+        operation = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"peer_id": "web/visitor/alice"},
+            memory_type="preferences",
+            uris=[],
+        )
+
+        uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
+
+        assert uris == [
+            "viking://user/support_bot/peers/web:visitor:bob/memories/preferences"
+        ]
         assert operation.memory_fields["peer_id"] == "web:visitor:bob"
