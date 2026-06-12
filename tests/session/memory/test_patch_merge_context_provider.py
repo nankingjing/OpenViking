@@ -203,7 +203,7 @@ def test_patch_merge_context_provider_instruction_mentions_path_field_normalizat
     assert "book not books" in instruction
     assert "Chinese" in instruction
     assert "书籍 not 书/图书" in instruction
-    assert "put it in delete_uris" in instruction
+    assert "put it in delete_ids" in instruction
 
 
 def test_patch_merge_context_provider_detects_language_from_patch_content(monkeypatch):

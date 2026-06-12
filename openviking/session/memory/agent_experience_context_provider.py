@@ -85,7 +85,7 @@ The system handles create vs update automatically:
 - **One experience per distinct user intent.** If a trajectory covers N different user goals (e.g., cancel + modify + add baggage), output N separate entries — never merge them into one.
 - **Split over merge.** When in doubt whether two patterns belong together, split them. Only merge with an existing experience when it covers the EXACT same user intent and tool sequence.
 - **Consistent naming language.** All `experience_name` values in one output must use the same language.
-- **Do NOT use `delete_uris`** for experience operations — use `supersedes` instead.
+- **Do NOT use `delete_ids`** for experience operations — use `supersedes` instead.
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.
 

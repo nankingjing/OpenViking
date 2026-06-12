@@ -37,6 +37,7 @@ from openviking.session.memory.memory_updater import (
     ExtractContext,
     MemoryUpdater,
     MemoryUpdateResult,
+    remap_stored_links,
     write_stored_links,
 )
 from openviking.session.memory.merge_op import MergeOpFactory
@@ -234,6 +235,9 @@ class StreamingMemoryUpdater:
         links = merge_link_lists(list(getattr(request.operations, "resolved_links", []) or []))
         if not links:
             return
+        links = remap_stored_links(
+            links, dict(getattr(result.operations, "delete_replacements", {}) or {})
+        )
         valid_links = await filter_valid_links(
             links,
             upsert_operations=result.operations.upsert_operations,
@@ -245,10 +249,8 @@ class StreamingMemoryUpdater:
             return
         viking_fs = safe_get_viking_fs()
         if viking_fs is not None:
-            await write_stored_links(valid_links, request.ctx, viking_fs)
-            for uri in dict.fromkeys(
-                uri for link in valid_links for uri in (link.from_uri, link.to_uri) if uri
-            ):
+            updated_uris = await write_stored_links(valid_links, request.ctx, viking_fs)
+            for uri in dict.fromkeys(updated_uris):
                 result.apply_result.add_edited(uri)
         result.operations.resolved_links = merge_link_lists(
             list(getattr(result.operations, "resolved_links", []) or []),
@@ -334,6 +336,7 @@ class StreamingMemoryUpdater:
                     delete_file_contents=list(operations.delete_file_contents or []),
                     errors=list(operations.errors or []),
                     resolved_links=merge_links,
+                    delete_replacements=dict(getattr(operations, "delete_replacements", {}) or {}),
                 ),
             )
         return append_request, merge_request
@@ -461,6 +464,7 @@ class StreamingMemoryUpdater:
             delete_file_contents=[],
             errors=[],
             resolved_links=[],
+            delete_replacements={},
         )
         for request in requests:
             ops = request.operations
@@ -468,6 +472,9 @@ class StreamingMemoryUpdater:
             all_ops.delete_file_contents.extend(list(ops.delete_file_contents or []))
             all_ops.errors.extend(list(ops.errors or []))
             all_ops.resolved_links.extend(list(getattr(ops, "resolved_links", []) or []))
+            all_ops.delete_replacements.update(
+                dict(getattr(ops, "delete_replacements", {}) or {})
+            )
         return await merge_memory_operations(
             operations=all_ops,
             messages=_combined_request_messages(requests),
@@ -524,6 +531,14 @@ def split_request_by_merge_group(
                         delete_file_contents=group_deletes,
                         errors=list(operations.errors or []),
                         resolved_links=[],
+                        delete_replacements={
+                            file.uri: replacement_uri
+                            for file in group_deletes
+                            if file.uri
+                            if (replacement_uri := (
+                                getattr(operations, "delete_replacements", {}) or {}
+                            ).get(file.uri))
+                        },
                     ),
                 ),
             )
@@ -541,6 +556,7 @@ def split_request_by_merge_group(
                         delete_file_contents=[],
                         errors=list(operations.errors or []),
                         resolved_links=[],
+                        delete_replacements={},
                     ),
                 ),
             )
@@ -614,6 +630,7 @@ async def merge_memory_operations(
 
     merged_upserts = list(passthrough_upserts)
     merged_deletes: list[MemoryFile] = []
+    merged_delete_replacements: dict[str, str] = {}
     merged_links = merge_link_lists(list(getattr(operations, "resolved_links", []) or []))
     registry = registry or create_default_registry()
     merge_results = await asyncio.gather(
@@ -648,6 +665,9 @@ async def merge_memory_operations(
             )
             merged_upserts.extend(merged.upsert_operations)
             merged_deletes.extend(merged.delete_file_contents)
+            merged_delete_replacements.update(
+                dict(getattr(merged, "delete_replacements", {}) or {})
+            )
             merged_links = merge_link_lists(
                 merged_links,
                 list(getattr(merged, "resolved_links", []) or []),
@@ -672,7 +692,14 @@ async def merge_memory_operations(
             raise merge_result
         # Fallback: keep original operations and delete files for this group
         merged_upserts.extend(ops_list)
-        merged_deletes.extend(delete_groups.get(group_key, []))
+        fallback_deletes = delete_groups.get(group_key, [])
+        merged_deletes.extend(fallback_deletes)
+        for delete_file in fallback_deletes:
+            replacement_uri = dict(
+                getattr(operations, "delete_replacements", {}) or {}
+            ).get(delete_file.uri)
+            if replacement_uri:
+                merged_delete_replacements[delete_file.uri] = replacement_uri
 
     merged_links = await filter_valid_links(
         merged_links,
@@ -686,6 +713,7 @@ async def merge_memory_operations(
         delete_file_contents=merged_deletes,
         errors=list(operations.errors),
         resolved_links=merged_links,
+        delete_replacements=merged_delete_replacements,
     )
 
 
@@ -751,6 +779,7 @@ async def merge_one_memory_type_operations(
             delete_file_contents=list(delete_files),
             errors=[],
             resolved_links=[],
+            delete_replacements={},
         )
     if operation_mode == "add_only":
         tracer.info(
@@ -767,6 +796,7 @@ async def merge_one_memory_type_operations(
             delete_file_contents=[],
             errors=[],
             resolved_links=[],
+            delete_replacements={},
         )
 
     fast_path, fast_path_reason = classify_memory_merge_mode(operations, schema=schema)
@@ -785,6 +815,7 @@ async def merge_one_memory_type_operations(
             delete_file_contents=[],
             errors=[],
             resolved_links=[],
+            delete_replacements={},
         )
 
     tracer.info(
@@ -922,7 +953,7 @@ def memory_file_to_delete_patch(
 
     The before_file is the original content; after_file is empty content,
     representing a deletion proposal. The merge LLM should put deleted files
-    in delete_uris.
+    in delete_ids.
     """
     after_file = MemoryFile(
         uri=mf.uri,
@@ -1402,6 +1433,7 @@ def combine_streaming_memory_results(
         delete_file_contents=[],
         errors=[],
         resolved_links=[],
+        delete_replacements={},
     )
     combined_apply_result = MemoryUpdateResult()
     metadata: dict[str, Any] = {
@@ -1419,6 +1451,9 @@ def combine_streaming_memory_results(
         combined_operations.resolved_links = merge_link_lists(
             combined_operations.resolved_links,
             list(getattr(result.operations, "resolved_links", []) or []),
+        )
+        combined_operations.delete_replacements.update(
+            dict(getattr(result.operations, "delete_replacements", {}) or {})
         )
         combined_apply_result.written_uris.extend(result.apply_result.written_uris)
         combined_apply_result.edited_uris.extend(result.apply_result.edited_uris)

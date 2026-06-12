@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
+    DeleteId,
     MemoryFile,
     ResolvedOperation,
     ResolvedOperations,
@@ -134,7 +135,7 @@ class ExtractLoop:
         # 预计算 expected_fields
         config = get_openviking_config()
         self._link_enabled = config.memory.link_enabled if config.memory else False
-        self._expected_fields = ["delete_uris"]
+        self._expected_fields = []
         if self._link_enabled:
             self._expected_fields.append("links")
 
@@ -165,6 +166,8 @@ class ExtractLoop:
 - For existing items, use the page_id shown in read/search results.
 - For new items, assign a unique page_id >= 100.
 - When editing an existing item, reuse its existing page_id.
+- To delete an existing item, add an entry to `delete_ids` using its page_id.
+- For canonical merges, set `replacement_page_id` to the surviving page that should inherit the deleted page's existing links/backlinks; for pure deletes, set `replacement_page_id` to null.
 """
         link_rules = ""
         if self._link_enabled:
@@ -375,20 +378,37 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
                 upsert_operations.append(resolved_op)
 
-        delete_uris_raw = getattr(operations, "delete_uris", []) or []
-        for uri_str in delete_uris_raw:
-            uri_str = uri_str.strip()
-            if not uri_str:
+        delete_ids = self._normalize_delete_ids(getattr(operations, "delete_ids", []) or [])
+        delete_replacements: dict[str, str] = {}
+        for delete_id in delete_ids:
+            if delete_id.delete_page_id is None or page_id_map is None:
                 continue
-            old_content = self.context_provider.read_file_contents.get(uri_str)
-            if old_content:
-                delete_file_contents.append(old_content)
+            delete_uri = page_id_map.resolve(delete_id.delete_page_id)
+            if not delete_uri:
+                continue
+            old_content = self.context_provider.read_file_contents.get(delete_uri)
+            if not old_content:
+                continue
+            delete_file_contents.append(old_content)
+
+            replacement_page_id = delete_id.replacement_page_id
+            if replacement_page_id is None:
+                continue
+            replacement_uri = page_id_map.resolve(replacement_page_id)
+            if not replacement_uri:
+                for op in upsert_operations:
+                    if op.page_id == replacement_page_id and op.uris:
+                        replacement_uri = op.uris[0]
+                        break
+            if replacement_uri and replacement_uri != delete_uri:
+                delete_replacements[delete_uri] = replacement_uri
 
         raw_links = getattr(operations, "links", None) or []
         resolved = ResolvedOperations(
             upsert_operations=upsert_operations,
             delete_file_contents=delete_file_contents,
             errors=errors,
+            delete_replacements=delete_replacements,
         )
 
         for op in upsert_operations:
@@ -399,6 +419,16 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         return resolved, raw_links
+
+
+    def _normalize_delete_ids(self, raw_delete_ids: List[Any]) -> List[DeleteId]:
+        delete_ids: List[DeleteId] = []
+        for raw in raw_delete_ids:
+            try:
+                delete_ids.append(DeleteId.model_validate(raw))
+            except Exception as e:
+                tracer.info(f"Skipping invalid delete_ids item: {raw}, error={e}")
+        return delete_ids
 
     async def finalize_operations(self, operations: ResolvedOperations, raw_links: List) -> None:
         """Register new page_ids and resolve links after refetch is complete.
@@ -741,7 +771,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
     def _build_final_operations_skeleton(self) -> Dict[str, List[Any]]:
         """Build an empty operations object matching the expected flat schema fields."""
-        fields = ["delete_uris", *(self._expected_fields or [])]
+        fields = ["delete_ids", *(self._expected_fields or [])]
         return {field: [] for field in dict.fromkeys(fields)}
 
     def _build_final_operations_instruction(self) -> str:

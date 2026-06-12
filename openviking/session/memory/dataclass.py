@@ -135,6 +135,24 @@ class StoredLink(BaseModel):
     created_at: str = ""
 
 
+class DeleteId(BaseModel):
+    """Delete request by page_id, optionally remapped to a replacement page_id."""
+
+    delete_page_id: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
+        ..., description="Page_id of the memory item to delete."
+    )
+    replacement_page_id: Annotated[
+        Optional[int],
+        WithJsonSchema({"anyOf": [{"type": "integer"}, {"type": "null"}]}),
+    ] = Field(
+        ...,
+        description=(
+            "Replacement page_id that should inherit this deleted page's existing links/backlinks; "
+            "use null for a pure delete."
+        ),
+    )
+
+
 class MemoryOperationSource(BaseModel):
     """Runtime and persisted provenance for one extracted memory operation.
 
@@ -286,6 +304,7 @@ class ResolvedOperations(BaseModel):
     delete_file_contents: List[MemoryFile]
     errors: List[str]
     resolved_links: List[StoredLink] = Field(default_factory=list)
+    delete_replacements: Dict[str, str] = Field(default_factory=dict)
 
     def has_errors(self) -> bool:
         return len(self.errors) > 0
@@ -420,7 +439,7 @@ class MemoryOperationsProtocol(Protocol):
     reasoning: str
     write_uris: List[Any]
     edit_uris: List[Any]
-    delete_uris: List[str]
+    delete_ids: List[DeleteId]
 
     def is_empty(self) -> bool: ...
 
@@ -445,21 +464,21 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
         default_factory=list,
         description="Edit operations with flat data format",
     )
-    delete_uris: List[str] = Field(
+    delete_ids: List[DeleteId] = Field(
         default_factory=list,
-        description="Delete operations as URI strings",
+        description="Delete operations by page_id, with optional replacement_page_id",
     )
 
     def is_empty(self) -> bool:
         """Check if there are any operations."""
-        return len(self.write_uris) == 0 and len(self.edit_uris) == 0 and len(self.delete_uris) == 0
+        return len(self.write_uris) == 0 and len(self.edit_uris) == 0 and len(self.delete_ids) == 0
 
     def to_legacy_operations(self) -> Dict[str, Any]:
         """Convert to legacy format (identity for fallback)."""
         return {
             "write_uris": self.write_uris,
             "edit_uris": self.edit_uris,
-            "delete_uris": self.delete_uris,
+            "delete_ids": self.delete_ids,
         }
 
     model_config = {"extra": "ignore"}

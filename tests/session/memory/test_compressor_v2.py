@@ -339,7 +339,7 @@ class TestCompressorV2:
                     SimpleNamespace(
                         write_uris=[],
                         edit_uris=[],
-                        delete_uris=[],
+                        delete_ids=[],
                     ),
                     [],
                 )
@@ -569,7 +569,7 @@ class TestCompressorV2:
                     SimpleNamespace(
                         write_uris=[],
                         edit_uris=[],
-                        delete_uris=[],
+                        delete_ids=[],
                     ),
                     [],
                 )
@@ -864,8 +864,8 @@ class TestExtractLoopPatchRepair:
 
             def __init__(self):
                 self.responses = [
-                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Has been reading as usual","replace":"- Has been reading as usual (as of 2023-11-11)"}]} }],"delete_uris":[]}',
-                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Likes reading","replace":"- Likes reading\n- Has been reading as usual (as of 2023-11-11)"}]} }],"delete_uris":[]}',
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Has been reading as usual","replace":"- Has been reading as usual (as of 2023-11-11)"}]} }],"delete_ids":[]}',
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Likes reading","replace":"- Likes reading\n- Has been reading as usual (as of 2023-11-11)"}]} }],"delete_ids":[]}',
                 ]
                 self.messages = []
 
@@ -961,8 +961,8 @@ class TestExtractLoopPatchRepair:
 
             def __init__(self):
                 self.responses = [
-                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Missing one","replace":"- Fixed one"}]} }],"delete_uris":[]}',
-                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Missing two","replace":"- Fixed two"}]} }],"delete_uris":[]}',
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Missing one","replace":"- Fixed one"}]} }],"delete_ids":[]}',
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Missing two","replace":"- Fixed two"}]} }],"delete_ids":[]}',
                 ]
                 self.messages = []
 
@@ -1057,7 +1057,7 @@ class TestExtractLoopPatchRepair:
 
             def __init__(self):
                 self.responses = [
-                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Likes reading","replace":"- Likes reading every night (as of 2023-11-11)"}]} }],"delete_uris":[]}',
+                    '{"profile":[{"page_id":1,"content":{"blocks":[{"search":"- Likes reading","replace":"- Likes reading every night (as of 2023-11-11)"}]} }],"delete_ids":[]}',
                 ]
                 self.messages = []
 

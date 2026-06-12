@@ -366,6 +366,102 @@ class TestMemoryUpdater:
         updater._apply_delete.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_apply_operations_remaps_deleted_links_to_replacement(self):
+        deleted_uri = "viking://user/u/memories/preferences/Evan/hobby_preferences.md"
+        replacement_uri = "viking://user/u/memories/preferences/Evan/hobbies.md"
+        profile_uri = "viking://user/u/memories/profile.md"
+
+        schema = MemoryTypeSchema(
+            memory_type="preferences",
+            description="preference memory",
+            directory="viking://user/{{ user_space }}/memories/preferences",
+            filename_template="{{ name }}.md",
+            fields=[],
+            overview_template="overview",
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        deleted_file = MemoryFile(
+            uri=deleted_uri,
+            content="old hobby preferences",
+            memory_type="preferences",
+            links=[
+                {
+                    "from_uri": deleted_uri,
+                    "to_uri": profile_uri,
+                    "link_type": "related_to",
+                    "weight": 0.8,
+                    "match_text": "hobby",
+                    "description": "old link",
+                }
+            ],
+        )
+        replacement_file = MemoryFile(
+            uri=replacement_uri,
+            content="new hobbies",
+            memory_type="preferences",
+        )
+        profile_file = MemoryFile(
+            uri=profile_uri,
+            content="profile",
+            memory_type="profile",
+        )
+        files = {
+            deleted_uri: MemoryFileUtils.write(deleted_file),
+            replacement_uri: MemoryFileUtils.write(replacement_file),
+            profile_uri: MemoryFileUtils.write(profile_file),
+        }
+
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
+
+        async def write_file(uri, content, ctx=None):
+            files[uri] = content
+
+        mock_viking_fs.write_file = AsyncMock(side_effect=write_file)
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._apply_upsert = AsyncMock(return_value=None)
+        updater._apply_delete = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        resolved = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"name": "hobbies"},
+                    memory_type="preferences",
+                    uris=[replacement_uri],
+                )
+            ],
+            delete_file_contents=[deleted_file],
+            errors=[],
+            resolved_links=[
+                StoredLink(
+                    from_uri=deleted_uri,
+                    to_uri=profile_uri,
+                    link_type="related_to",
+                    weight=0.9,
+                    match_text="hobby",
+                    description="in-flight link",
+                )
+            ],
+            delete_replacements={deleted_uri: replacement_uri},
+        )
+
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        result = await updater.apply_operations(operations=resolved, ctx=ctx)
+
+        assert result.written_uris == [replacement_uri]
+        assert result.deleted_uris == [deleted_uri]
+        assert resolved.resolved_links[0].from_uri == replacement_uri
+        profile = MemoryFileUtils.read(files[profile_uri], uri=profile_uri)
+        assert profile.backlinks[0]["from_uri"] == replacement_uri
+        assert profile.backlinks[0]["to_uri"] == profile_uri
+
+    @pytest.mark.asyncio
     async def test_apply_operations_routes_backlinks_to_matching_uri_only(self):
         caroline_uri = (
             "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"
