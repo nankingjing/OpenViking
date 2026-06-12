@@ -873,10 +873,13 @@ def classify_memory_merge_mode(
         return True, "add_only"
     if is_cross_extraction_group(operations):
         return False, "cross_extraction_batch"
+    # Multi-patch batches always go through LLM merge even if all files are new and
+    # URIs are unique — the LLM handles semantic deduplication and directory name
+    # normalization (e.g. activity vs activities, art_form vs art_forms).
+    if len(operations) > 1:
+        return False, "multi_patch_semantic_merge"
     if all_new_files and duplicate_target_count == 0:
         return True, "unique_new_files"
-    if len(operations) != 1:
-        return False, "multi_patch_existing_or_conflict"
 
     op = operations[0]
     old_file = getattr(op, "old_memory_file_content", None)

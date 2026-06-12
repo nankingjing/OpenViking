@@ -612,7 +612,7 @@ PY
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
-        --threads 10 \
+        --threads 50 \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
