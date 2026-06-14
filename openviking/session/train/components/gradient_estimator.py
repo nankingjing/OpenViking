@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,26 +64,28 @@ class ExperienceGradientEstimator:
             raise ValueError("ExperienceGradientContext.request_context is required")
 
         extract_context = _context_with_analysis_messages(context, analysis)
-        gradients: list[PatchSemanticGradient] = []
-        for trajectory in analysis.trajectories:
+
+        async def estimate_one(trajectory: Trajectory) -> list[PatchSemanticGradient]:
             try:
                 operations = await self._run_extract_loop(trajectory, extract_context)
             except Exception:
                 logger.exception("Experience gradient estimation failed")
                 if context.strict_extract_errors:
                     raise
-                continue
+                return []
             if operations is None:
-                continue
-            gradients.extend(
-                _operations_to_gradients(
-                    operations=operations,
-                    trajectory=trajectory,
-                    analysis=analysis,
-                    experience_set=experience_set,
-                )
+                return []
+            return _operations_to_gradients(
+                operations=operations,
+                trajectory=trajectory,
+                analysis=analysis,
+                experience_set=experience_set,
             )
-        return gradients
+
+        gradient_batches = await asyncio.gather(
+            *(estimate_one(trajectory) for trajectory in analysis.trajectories)
+        )
+        return [gradient for batch in gradient_batches for gradient in batch]
 
     @tracer(
         "train.gradient_estimator.experience.extract_loop",
@@ -194,10 +197,32 @@ def _operations_to_gradients(
                     "trajectory_outcome": trajectory.outcome,
                     "rubric_passed": analysis.evaluation.passed,
                     "supersedes": fields.get("supersedes"),
+                    "training_category": _trajectory_training_category(trajectory, analysis),
                 },
             )
         )
     return gradients
+
+
+def _trajectory_training_category(
+    trajectory: Trajectory,
+    analysis: RolloutAnalysis,
+) -> str:
+    trajectory_metadata = dict(getattr(trajectory, "metadata", {}) or {})
+    for key in ("training_category", "category"):
+        value = trajectory_metadata.get(key)
+        if value:
+            return str(value)
+
+    analysis_metadata = dict(getattr(analysis, "metadata", {}) or {})
+    for key in ("training_category", "category", "case_task_signature", "task_signature"):
+        value = analysis_metadata.get(key)
+        if value:
+            return str(value)
+
+    if trajectory.retrieval_anchor:
+        return str(trajectory.retrieval_anchor)
+    return str(trajectory.name)
 
 
 def _operation_after_file(

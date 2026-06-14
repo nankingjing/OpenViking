@@ -631,6 +631,201 @@ async def test_streaming_policy_trainer_flushes_on_gradient_count():
 
 
 @pytest.mark.asyncio
+async def test_streaming_policy_trainer_splits_flush_by_gradient_count():
+    from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
+
+    class MultiGradientEstimator:
+        async def estimate(self, analysis, experience_set, context):
+            del context
+            traj = analysis.trajectories[0]
+            return [
+                DummyGradient(
+                    target_experience_name="booking_duplicate_handling",
+                    target_experience_uri=experience_set.policies[0].uri,
+                    base_version=experience_set.policies[0].version,
+                    rationale=f"gradient {idx}",
+                    links=[
+                        StoredLink(
+                            from_uri=experience_set.policies[0].uri,
+                            to_uri=traj.uri,
+                            link_type="derived_from",
+                            weight=1.0,
+                        )
+                    ],
+                    confidence=0.9,
+                )
+                for idx in range(5)
+            ]
+
+    class RecordingOptimizer:
+        def __init__(self):
+            self.gradient_counts = []
+
+        async def plan(self, gradients, policy_set, context):
+            del policy_set, context
+            self.gradient_counts.append(len(gradients))
+            return PolicyUpdatePlan(metadata={"gradient_count": len(gradients)})
+
+    optimizer = RecordingOptimizer()
+    trainer = StreamingPolicyTrainer(
+        policy_set=_policy_set(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=MultiGradientEstimator(),
+        policy_optimizer=optimizer,
+        policy_updater=DummyUpdater(),
+        context=PipelineContext(),
+        config=StreamingPolicyTrainerConfig(
+            max_gradients_per_update=3,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="split", role="user", parts=[TextPart(text="split")])],
+        policy_snapshot_id="snapshot-1",
+    )
+
+    result = await trainer.submit_rollout(rollout)
+
+    assert optimizer.gradient_counts == [3, 2]
+    assert result.metadata["gradient_count"] == 5
+    assert result.metadata["chunk_count"] == 2
+    assert result.metadata["chunk_gradient_counts"] == [3, 2]
+    assert result.metadata["chunk_target_counts"] == [1, 1]
+    assert result.plan.metadata["chunk_item_counts"] == [0, 0]
+    assert result.apply_result.metadata["chunk_count"] == 2
+    assert result.apply_result.updated_policy_set.policies[0].version == 3
+
+    assert await trainer.close() is None
+
+
+@pytest.mark.asyncio
+async def test_streaming_policy_trainer_splits_different_target_gradient_groups():
+    from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
+
+    class MultiTargetEstimator:
+        async def estimate(self, analysis, experience_set, context):
+            del context
+            traj = analysis.trajectories[0]
+            return [
+                DummyGradient(
+                    target_experience_name=f"target_{idx}",
+                    target_experience_uri=f"{experience_set.root_uri}/target_{idx}.md",
+                    base_version=None,
+                    rationale=f"gradient {idx}",
+                    links=[
+                        StoredLink(
+                            from_uri=f"{experience_set.root_uri}/target_{idx}.md",
+                            to_uri=traj.uri,
+                            link_type="derived_from",
+                            weight=1.0,
+                        )
+                    ],
+                    confidence=0.9,
+                )
+                for idx in range(5)
+            ]
+
+    class RecordingOptimizer:
+        def __init__(self):
+            self.gradient_counts = []
+
+        async def plan(self, gradients, policy_set, context):
+            del policy_set, context
+            self.gradient_counts.append(len(gradients))
+            return PolicyUpdatePlan(metadata={"gradient_count": len(gradients)})
+
+    optimizer = RecordingOptimizer()
+    trainer = StreamingPolicyTrainer(
+        policy_set=_policy_set(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=MultiTargetEstimator(),
+        policy_optimizer=optimizer,
+        policy_updater=DummyUpdater(),
+        context=PipelineContext(),
+        config=StreamingPolicyTrainerConfig(
+            max_gradients_per_update=3,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="split-targets", role="user", parts=[TextPart(text="split")])],
+        policy_snapshot_id="snapshot-1",
+    )
+
+    result = await trainer.submit_rollout(rollout)
+
+    assert optimizer.gradient_counts == [3, 2]
+    assert result.metadata["chunk_gradient_counts"] == [3, 2]
+    assert await trainer.close() is None
+
+
+@pytest.mark.asyncio
+async def test_streaming_policy_trainer_keeps_categories_separate_when_chunking():
+    from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
+
+    class CategorizedEstimator:
+        async def estimate(self, analysis, experience_set, context):
+            del analysis, context
+            return [
+                DummyGradient(
+                    target_experience_name=f"target_{idx}",
+                    target_experience_uri=f"{experience_set.root_uri}/target_{idx}.md",
+                    base_version=None,
+                    rationale=f"gradient {idx}",
+                    links=[],
+                    confidence=0.9,
+                    metadata={"training_category": "category_a" if idx < 2 else "category_b"},
+                )
+                for idx in range(4)
+            ]
+
+    class RecordingOptimizer:
+        def __init__(self):
+            self.gradient_counts = []
+            self.categories = []
+
+        async def plan(self, gradients, policy_set, context):
+            del policy_set, context
+            self.gradient_counts.append(len(gradients))
+            self.categories.append(
+                [gradient.metadata["training_category"] for gradient in gradients]
+            )
+            return PolicyUpdatePlan(metadata={"gradient_count": len(gradients)})
+
+    optimizer = RecordingOptimizer()
+    trainer = StreamingPolicyTrainer(
+        policy_set=_policy_set(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=CategorizedEstimator(),
+        policy_optimizer=optimizer,
+        policy_updater=DummyUpdater(),
+        context=PipelineContext(),
+        config=StreamingPolicyTrainerConfig(
+            max_gradients_per_update=3,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="split-categories", role="user", parts=[TextPart(text="split")])],
+        policy_snapshot_id="snapshot-1",
+    )
+
+    result = await trainer.submit_rollout(rollout)
+
+    assert optimizer.gradient_counts == [2, 2]
+    assert optimizer.categories == [["category_a", "category_a"], ["category_b", "category_b"]]
+    assert result.metadata["chunk_gradient_counts"] == [2, 2]
+    assert result.metadata["chunk_categories"] == [["category_a"], ["category_b"]]
+    assert await trainer.close() is None
+
+
+@pytest.mark.asyncio
 async def test_streaming_policy_trainer_flushes_on_timer():
     from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
 

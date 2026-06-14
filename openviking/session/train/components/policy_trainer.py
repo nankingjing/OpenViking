@@ -261,7 +261,16 @@ class StreamingPolicyTrainer:
         items: list["_BufferedRolloutTraining"],
         reason: str,
     ) -> RolloutTrainingResult:
-        gradients = [gradient for item in items for gradient in item.gradients]
+        chunks = _chunks_buffered_items_by_gradient_count(
+            items,
+            self.config.max_gradients_per_update,
+        )
+        gradients = [
+            gradient
+            for chunk in chunks
+            for chunk_item in chunk.items
+            for gradient in chunk_item.gradients
+        ]
         analyses = _unique_by_identity([item.analysis for item in items])
         rollouts = _unique_by_identity([item.rollout for item in items])
         tracer.info(
@@ -272,13 +281,42 @@ class StreamingPolicyTrainer:
             f"gradient_count={len(gradients)}",
             console=self.config.trace_console,
         )
-        plan, apply_result = await self._core.plan_and_apply(
-            gradients=gradients,
-            policy_set=self.policy_set,
-            ctx=self.context,
-        )
+
+        plans: list[PolicyUpdatePlan] = []
+        apply_results: list[PolicyApplyResult] = []
+        for chunk_index, chunk in enumerate(chunks):
+            gradient_chunk = chunk.gradients
+            tracer.info(
+                "StreamingPolicyTrainer flush chunk started "
+                f"reason={reason} "
+                f"chunk_index={chunk_index} "
+                f"gradient_count={len(gradient_chunk)}",
+                console=self.config.trace_console,
+            )
+            plan, apply_result = await self._core.plan_and_apply(
+                gradients=gradient_chunk,
+                policy_set=self.policy_set,
+                ctx=self.context,
+            )
+            self.policy_set = apply_result.updated_policy_set
+            plans.append(plan)
+            apply_results.append(apply_result)
+            tracer.info(
+                "StreamingPolicyTrainer flush chunk finished "
+                f"reason={reason} "
+                f"chunk_index={chunk_index} "
+                f"written_uris={apply_result.written_uris} "
+                f"errors={apply_result.errors}",
+                console=self.config.trace_console,
+            )
+
+        plan = _combine_update_plans(plans)
+        apply_result = _combine_apply_results(apply_results, fallback_policy_set=self.policy_set)
         self.policy_set = apply_result.updated_policy_set
         self._last_apply_result = apply_result
+        chunk_gradient_counts = [len(chunk.gradients) for chunk in chunks]
+        chunk_categories = [list(chunk.categories) for chunk in chunks]
+        chunk_target_counts = [len(chunk.target_keys) for chunk in chunks]
         result = RolloutTrainingResult(
             analyses=analyses,
             gradients=gradients,
@@ -289,6 +327,10 @@ class StreamingPolicyTrainer:
                 "rollout_count": len(rollouts),
                 "analysis_count": len(analyses),
                 "gradient_count": len(gradients),
+                "chunk_count": len(chunk_gradient_counts),
+                "chunk_gradient_counts": chunk_gradient_counts,
+                "chunk_categories": chunk_categories,
+                "chunk_target_counts": chunk_target_counts,
                 "score": _average_score(analyses),
                 "source": "streaming_rollouts",
                 "flush_reason": reason,
@@ -297,6 +339,7 @@ class StreamingPolicyTrainer:
         tracer.info(
             "StreamingPolicyTrainer flush finished "
             f"reason={reason} "
+            f"chunk_count={len(chunk_gradient_counts)} "
             f"written_uris={apply_result.written_uris} "
             f"errors={apply_result.errors}",
             console=self.config.trace_console,
@@ -304,8 +347,220 @@ class StreamingPolicyTrainer:
         return result
 
 
+def _chunks_buffered_items_by_gradient_count(
+    items: list["_BufferedRolloutTraining"],
+    size: int,
+) -> list["_BufferedRolloutTrainingChunk"]:
+    if size <= 0:
+        raise ValueError("chunk size must be > 0")
+
+    category_groups = _category_groups_preserving_order(items)
+    chunks: list[_BufferedRolloutTrainingChunk] = []
+    for category_group in category_groups:
+        if not category_group.gradients:
+            chunks.append(
+                _BufferedRolloutTrainingChunk(
+                    items=[
+                        _BufferedRolloutTraining(
+                            gradients=[],
+                            analysis=category_group.analysis,
+                            rollout=category_group.rollout,
+                        )
+                    ],
+                    gradients=[],
+                    categories=(category_group.category,),
+                    target_keys=(),
+                )
+            )
+            continue
+
+        current_items: list[_BufferedRolloutTraining] = []
+        current_gradients: list[SemanticGradient] = []
+        current_target_keys: list[Hashable] = []
+
+        def flush_current() -> None:
+            nonlocal current_items, current_gradients, current_target_keys
+            if not current_gradients:
+                return
+            chunks.append(
+                _BufferedRolloutTrainingChunk(
+                    items=current_items,
+                    gradients=current_gradients,
+                    categories=(category_group.category,),
+                    target_keys=tuple(current_target_keys),
+                )
+            )
+            current_items = []
+            current_gradients = []
+            current_target_keys = []
+
+        for target_group in _target_groups_preserving_order(category_group):
+            for target_slice in _split_gradients(target_group.gradients, size):
+                if len(current_gradients) + len(target_slice) > size:
+                    flush_current()
+                current_items.append(
+                    _BufferedRolloutTraining(
+                        gradients=target_slice,
+                        analysis=target_group.analysis,
+                        rollout=target_group.rollout,
+                    )
+                )
+                current_gradients.extend(target_slice)
+                if target_group.target_key not in current_target_keys:
+                    current_target_keys.append(target_group.target_key)
+                if len(current_gradients) >= size:
+                    flush_current()
+        flush_current()
+
+    return chunks
+
+
+def _category_groups_preserving_order(
+    items: list["_BufferedRolloutTraining"],
+) -> list["_BufferedCategoryGroup"]:
+    groups: list[_BufferedCategoryGroup] = []
+    group_index: dict[Hashable, int] = {}
+    for item_index, item in enumerate(items):
+        if not item.gradients:
+            groups.append(
+                _BufferedCategoryGroup(
+                    category=("__empty__", item_index),
+                    gradients=[],
+                    analysis=item.analysis,
+                    rollout=item.rollout,
+                )
+            )
+            continue
+        for gradient in item.gradients:
+            category = _gradient_training_category(gradient)
+            existing_index = group_index.get(category)
+            if existing_index is None:
+                group_index[category] = len(groups)
+                groups.append(
+                    _BufferedCategoryGroup(
+                        category=category,
+                        gradients=[gradient],
+                        analysis=item.analysis,
+                        rollout=item.rollout,
+                    )
+                )
+            else:
+                groups[existing_index].gradients.append(gradient)
+    return groups
+
+
+def _target_groups_preserving_order(
+    category_group: "_BufferedCategoryGroup",
+) -> list["_BufferedTargetGroup"]:
+    groups: list[_BufferedTargetGroup] = []
+    group_index: dict[Hashable, int] = {}
+    for gradient in category_group.gradients:
+        key = _gradient_target_key(gradient)
+        existing_index = group_index.get(key)
+        if existing_index is None:
+            group_index[key] = len(groups)
+            groups.append(
+                _BufferedTargetGroup(
+                    target_key=key,
+                    gradients=[gradient],
+                    analysis=category_group.analysis,
+                    rollout=category_group.rollout,
+                )
+            )
+        else:
+            groups[existing_index].gradients.append(gradient)
+    return groups
+
+
+def _split_gradients(
+    gradients: list[SemanticGradient],
+    size: int,
+) -> list[list[SemanticGradient]]:
+    return [gradients[index : index + size] for index in range(0, len(gradients), size)]
+
+
+def _gradient_training_category(gradient: SemanticGradient) -> Hashable:
+    metadata = getattr(gradient, "metadata", None) or {}
+    for key in ("training_category", "category"):
+        value = metadata.get(key)
+        if value:
+            return str(value)
+    return ("__uncategorized__",)
+
+
+def _gradient_target_key(gradient: SemanticGradient) -> Hashable:
+    uri = getattr(gradient, "target_experience_uri", None)
+    if uri:
+        return ("uri", str(uri))
+    name = getattr(gradient, "target_experience_name", None)
+    if name:
+        return ("name", str(name))
+    after_file = getattr(gradient, "after_file", None)
+    after_uri = getattr(after_file, "uri", None)
+    if after_uri:
+        return ("uri", str(after_uri))
+    return ("gradient", id(gradient))
+
+
+def _combine_update_plans(plans: list[PolicyUpdatePlan]) -> PolicyUpdatePlan:
+    if not plans:
+        return PolicyUpdatePlan(items=[], metadata={"chunk_count": 0})
+    items = [item for plan in plans for item in plan.items]
+    return PolicyUpdatePlan(
+        items=items,
+        metadata={
+            "chunk_count": len(plans),
+            "chunk_item_counts": [len(plan.items) for plan in plans],
+            "chunks": [dict(plan.metadata or {}) for plan in plans],
+        },
+    )
+
+
+def _combine_apply_results(
+    results: list[PolicyApplyResult],
+    *,
+    fallback_policy_set: ExperienceSet,
+) -> PolicyApplyResult:
+    if not results:
+        return PolicyApplyResult(updated_policy_set=fallback_policy_set)
+    return PolicyApplyResult(
+        updated_policy_set=results[-1].updated_policy_set,
+        written_uris=[uri for result in results for uri in result.written_uris],
+        deleted_uris=[uri for result in results for uri in result.deleted_uris],
+        errors=[error for result in results for error in result.errors],
+        metadata={
+            "chunk_count": len(results),
+            "chunk_metadata": [dict(result.metadata or {}) for result in results],
+        },
+    )
+
+
 @dataclass(slots=True)
 class _BufferedRolloutTraining:
+    gradients: list[SemanticGradient]
+    analysis: RolloutAnalysis
+    rollout: Rollout
+
+
+@dataclass(slots=True)
+class _BufferedRolloutTrainingChunk:
+    items: list[_BufferedRolloutTraining]
+    gradients: list[SemanticGradient]
+    categories: tuple[Hashable, ...]
+    target_keys: tuple[Hashable, ...]
+
+
+@dataclass(slots=True)
+class _BufferedCategoryGroup:
+    category: Hashable
+    gradients: list[SemanticGradient]
+    analysis: RolloutAnalysis
+    rollout: Rollout
+
+
+@dataclass(slots=True)
+class _BufferedTargetGroup:
+    target_key: Hashable
     gradients: list[SemanticGradient]
     analysis: RolloutAnalysis
     rollout: Rollout

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import asyncio
 import pytest
 
 from openviking.session.memory.dataclass import MemoryFile
@@ -55,6 +56,7 @@ def _analysis(*, passed: bool = True, outcome: str = "success") -> RolloutAnalys
                 content="trajectory content",
                 outcome=outcome,
                 retrieval_anchor="Stage: final",
+                metadata={"training_category": "booking"},
             )
         ],
     )
@@ -130,6 +132,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.confidence == pytest.approx(0.9)
     assert gradient.metadata["trajectory_outcome"] == "success"
     assert gradient.metadata["rubric_passed"] is True
+    assert gradient.metadata["training_category"] == "booking"
     assert len(estimator.calls) == 1
 
 
@@ -157,6 +160,43 @@ async def test_experience_gradient_estimator_uses_policy_version_for_newer_old_f
     assert gradient.before_file is None
     assert gradient.after_file.content == "replacement body"
     assert gradient.confidence == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
+async def test_experience_gradient_estimator_runs_trajectory_extracts_in_parallel():
+    analysis = _analysis()
+    analysis.trajectories.append(
+        Trajectory(
+            name="booking_duplicate_second",
+            uri="viking://user/u/memories/trajectories/booking_duplicate_second.md",
+            content="second trajectory content",
+            outcome="success",
+            retrieval_anchor="Stage: final",
+        )
+    )
+
+    class ParallelProbeEstimator(ExperienceGradientEstimator):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.max_active = 0
+            self.all_started = asyncio.Event()
+
+        async def _run_extract_loop(self, trajectory, context):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            if self.active == len(analysis.trajectories):
+                self.all_started.set()
+            try:
+                await asyncio.wait_for(self.all_started.wait(), timeout=0.2)
+                return None
+            finally:
+                self.active -= 1
+
+    estimator = ParallelProbeEstimator()
+
+    assert await estimator.estimate(analysis, _experience_set(), _context()) == []
+    assert estimator.max_active == len(analysis.trajectories)
 
 
 @pytest.mark.asyncio
