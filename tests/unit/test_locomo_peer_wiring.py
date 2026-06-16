@@ -46,15 +46,14 @@ def _sample_payload():
     }
 
 
-def test_build_memory_policy_writes_peer_only():
-    assert IMPORT_TO_OV.build_memory_policy(False) == {
+def test_build_memory_policy_writes_peer_only_user_memories():
+    expected = {
         "self": {"enabled": False},
         "peer": {"enabled": True},
+        "memory_types": ["entities", "events", "preferences", "profile"],
     }
-    assert IMPORT_TO_OV.build_memory_policy(True) == {
-        "self": {"enabled": False},
-        "peer": {"enabled": True},
-    }
+    assert IMPORT_TO_OV.build_memory_policy(False) == expected
+    assert IMPORT_TO_OV.build_memory_policy(True) == expected
 
 
 def test_build_session_messages_non_group_uses_sample_peer_and_prefixes_speaker():
@@ -83,6 +82,10 @@ async def test_viking_ingest_uses_message_peer_id(monkeypatch):
         async def create_session(self, memory_policy=None):
             calls.append(("create_session", memory_policy))
             return {"session_id": "sess-1"}
+
+        async def get_session(self, session_id):
+            calls.append(("get_session", session_id))
+            return {"commit_count": 0}
 
         async def add_message(
             self, session_id=None, role=None, parts=None, created_at=None, peer_id=None
@@ -140,7 +143,7 @@ def test_load_locomo_qa_keeps_internal_and_original_sample_ids(tmp_path):
 def test_run_vikingbot_chat_non_group_builds_sender_without_memory_peers(monkeypatch):
     calls = []
 
-    def fake_run(cmd, capture_output, text, timeout=None, check=False):
+    def fake_run(cmd, capture_output, text, timeout=None, check=False, env=None):
         calls.append(cmd)
         return SimpleNamespace(
             stdout=json.dumps(
@@ -157,7 +160,7 @@ def test_run_vikingbot_chat_non_group_builds_sender_without_memory_peers(monkeyp
 
     monkeypatch.setattr(RUN_EVAL.subprocess, "run", fake_run)
 
-    response, token_usage, _time_cost, iteration, tools_used_names = RUN_EVAL.run_vikingbot_chat(
+    response, token_usage, _time_cost, iteration, tools_used_names, _log_file = RUN_EVAL.run_vikingbot_chat(
         question="Who said hello?",
         question_time="2023-05-08",
         sender_peer_id="conv-26",

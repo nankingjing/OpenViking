@@ -173,7 +173,7 @@ def _get_session_number(session_key: str) -> int:
     return int(session_key.split("_")[1])
 
 
-def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
+def build_memory_policy(group_chat: bool) -> Dict[str, Any]:
     """Build session/commit memory policy for benchmark ingest.
 
     LoCoMo eval isolates samples through peer memory. In non-group mode the
@@ -181,11 +181,15 @@ def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
     speaker. Do not write benchmark memories into the current User self memory,
     otherwise all samples imported by the same User API key become visible to
     every question.
+
+    Import only user-facing LoCoMo memories; skip cases/train/runtime memory
+    types so benchmark ingest does not create training cases.
     """
     del group_chat
     return {
         "self": {"enabled": False},
         "peer": {"enabled": True},
+        "memory_types": ["entities", "events", "preferences", "profile"],
     }
 
 
