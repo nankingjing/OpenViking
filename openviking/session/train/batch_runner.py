@@ -242,6 +242,8 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 baseline_eval = baseline_result.metadata["report"]
             else:
                 baseline_eval = _load_baseline_cache(baseline_cache_path)
+                if baseline_eval is not None:
+                    _print_baseline_cache_hit(baseline_eval, baseline_cache_path)
 
         train_loader = _case_loader(config, split="train", limit=config.train_limit)
 
@@ -504,6 +506,53 @@ def _load_baseline_cache(path: Path) -> dict[str, Any] | None:
         "baseline_cache_hit": True,
         "baseline_cache_path": str(path),
     }
+
+
+def _print_baseline_cache_hit(report: dict[str, Any], cache_path: Path) -> None:
+    """Print cached baseline info before training starts so users see it immediately."""
+    trial_count = int(report.get("trial_count") or 1)
+    cache_info = f" (from cache: {cache_path.name})"
+    if trial_count > 1:
+        accuracy_mean = report.get("accuracy_mean")
+        accuracy_std = report.get("accuracy_std")
+        reward_mean = report.get("average_reward_mean")
+        reward_std = report.get("average_reward_std")
+        cases_per_trial = report.get("case_count_per_trial") or "varies"
+        print(
+            f"[baseline_test_rollout] baseline_cache_hit=1 accuracy="
+            f"{_fmt_percent(accuracy_mean)} ± {_fmt_pp_abs(accuracy_std)} "
+            f"avg_reward={_fmt_score(reward_mean)} ± {_fmt_score(reward_std)} "
+            f"trials={trial_count} cases_per_trial={cases_per_trial}"
+            f"{cache_info}"
+        )
+        return
+    accuracy = report.get("accuracy")
+    passed = report.get("passed_count")
+    total = report.get("case_count")
+    avg_reward = report.get("average_reward")
+    print(
+        f"[baseline_test_rollout] baseline_cache_hit=1 accuracy={_fmt_percent(accuracy)} "
+        f"passed={passed}/{total} avg_reward={_fmt_score(avg_reward)}"
+        f"{cache_info}"
+    )
+
+
+def _fmt_percent(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100:.2f}%"
+
+
+def _fmt_pp_abs(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100:.2f}pp"
+
+
+def _fmt_score(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.6f}"
 
 
 
