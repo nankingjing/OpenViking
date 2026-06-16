@@ -8,6 +8,7 @@ scenarios.
 from __future__ import annotations
 
 import sys
+import time
 from typing import Optional
 
 from rich.console import Console
@@ -20,6 +21,30 @@ from rich.progress import (
 )
 from rich.table import Column
 from rich.text import Text
+
+
+def format_duration(seconds: float) -> str:
+    """Format a duration as compact h/m/s text for progress displays."""
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+class ElapsedTimeColumn(ProgressColumn):
+    """Render wall-clock elapsed time for a progress task."""
+
+    def render(self, task: Task) -> Text:
+        started_at = task.fields.get("started_at")
+        if started_at is None:
+            return Text("elapsed: 0s", style="dim")
+        elapsed = format_duration(time.monotonic() - float(started_at))
+        return Text(f"elapsed: {elapsed}", style="dim")
+
 
 # ---------------------------------------------------------------------------
 # Three-state bar column
@@ -117,10 +142,11 @@ def make_three_state_progress(
             " ({task.completed}/{task.total}, "
             "[bold yellow]{task.fields[running]} running[/])"
         ),
+        ElapsedTimeColumn(),
         console=console,
         transient=transient,
     )
-    task_id = progress.add_task(description, total=0, running=0)
+    task_id = progress.add_task(description, total=0, running=0, started_at=time.monotonic())
     return progress, task_id
 
 
