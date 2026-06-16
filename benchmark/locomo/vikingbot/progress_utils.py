@@ -66,7 +66,7 @@ class ThreeStateBarColumn(ProgressColumn):
 
     def __init__(
         self,
-        bar_width: int = 42,
+        bar_width: int = 28,
         style: str = "bar.complete",
         running_style: str = "bar.finished",
         complete_style: Optional[str] = None,
