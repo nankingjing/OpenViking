@@ -424,8 +424,8 @@ def main():
     )
     parser.add_argument(
         "--output",
-        default="./result/locomo_qa_result.csv",
-        help="Path to output csv file, default: ./result/locomo_qa_result.csv",
+        default="./result/locomo/locomo_qa_result.csv",
+        help="Path to output csv file, default: ./result/locomo/locomo_qa_result.csv",
     )
     parser.add_argument(
         "--errors",

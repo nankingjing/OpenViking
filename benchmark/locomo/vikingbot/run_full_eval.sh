@@ -203,7 +203,7 @@ if [ "$AUTO_COMMIT" = "true" ]; then
 fi
 GIT_COMMIT_ID=$(git rev-parse --short HEAD)
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
-IMPORT_SUCCESS_CSV="./result/import_success.csv"
+IMPORT_SUCCESS_CSV="./result/locomo/import_success.csv"
 IMPORT_ROW_START=0
 IMPORT_PERFORMED=false
 
@@ -343,9 +343,9 @@ if [ -n "$RETRY_WRONG" ]; then
     echo "源文件: $RETRY_WRONG"
 
     if [ "$AUTO_COMMIT" = "true" ]; then
-        RESULT_FILE="./result/locomo_retry_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
+        RESULT_FILE="./result/locomo/locomo_retry_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
     else
-        RESULT_FILE="./result/locomo_retry_${TIMESTAMP}.csv"
+        RESULT_FILE="./result/locomo/locomo_retry_${TIMESTAMP}.csv"
     fi
 
     # 从错题 CSV 中提取需要导入的对话（复用 import_to_ov.py 的并行逻辑）
@@ -394,9 +394,9 @@ if [ -z "$SAMPLE" ]; then
     echo "=== 全量评测模式 ==="
 
     if [ "$AUTO_COMMIT" = "true" ]; then
-        RESULT_FILE="./result/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
+        RESULT_FILE="./result/locomo/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
     else
-        RESULT_FILE="./result/locomo_result_${TIMESTAMP}.csv"
+        RESULT_FILE="./result/locomo/locomo_result_${TIMESTAMP}.csv"
     fi
 
     # 导入数据
@@ -497,9 +497,9 @@ if [ -n "$QUESTION_INDEX" ]; then
         echo "[2/3] Running evaluation..."
     fi
     if [ "$AUTO_COMMIT" = "true" ]; then
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
+        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
     else
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv
+        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv
     fi
     prepare_bot_log_dir "$OUTPUT_FILE"
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
@@ -603,9 +603,9 @@ PY
         echo "[2/4] Running evaluation for all questions..."
     fi
     if [ "$AUTO_COMMIT" = "true" ]; then
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
+        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
     else
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_result_${TIMESTAMP}.csv
+        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_result_${TIMESTAMP}.csv
     fi
     prepare_bot_log_dir "$OUTPUT_FILE"
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \

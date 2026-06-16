@@ -314,7 +314,7 @@ def build_session_messages(
 # ---------------------------------------------------------------------------
 
 
-def load_success_csv(csv_path: str = "./result/import_success.csv") -> set:
+def load_success_csv(csv_path: str = "./result/locomo/import_success.csv") -> set:
     """加载成功导入的CSV记录，返回已成功的键集合"""
     success_keys = set()
     if Path(csv_path).exists():
@@ -327,7 +327,7 @@ def load_success_csv(csv_path: str = "./result/import_success.csv") -> set:
 
 
 def write_success_record(
-    record: Dict[str, Any], csv_path: str = "./result/import_success.csv"
+    record: Dict[str, Any], csv_path: str = "./result/locomo/import_success.csv"
 ) -> None:
     """写入成功记录到CSV文件"""
     file_exists = Path(csv_path).exists()
@@ -372,7 +372,7 @@ def write_success_record(
 
 
 def write_error_record(
-    record: Dict[str, Any], error_path: str = "./result/import_errors.log"
+    record: Dict[str, Any], error_path: str = "./result/locomo/import_errors.log"
 ) -> None:
     """写入错误记录到日志文件"""
     with open(error_path, "a", encoding="utf-8") as f:
@@ -424,7 +424,7 @@ class _NullCtx:
         return False
 
 
-def load_ingest_record(record_path: str = "./result/.ingest_record.json") -> Dict[str, Any]:
+def load_ingest_record(record_path: str = "./result/locomo/.ingest_record.json") -> Dict[str, Any]:
     """Load existing ingest record file, return empty dict if not exists."""
     try:
         with open(record_path, "r", encoding="utf-8") as f:
@@ -434,7 +434,7 @@ def load_ingest_record(record_path: str = "./result/.ingest_record.json") -> Dic
 
 
 def save_ingest_record(
-    record: Dict[str, Any], record_path: str = "./result/.ingest_record.json"
+    record: Dict[str, Any], record_path: str = "./result/locomo/.ingest_record.json"
 ) -> None:
     """Save ingest record to file."""
     with open(record_path, "w", encoding="utf-8") as f:
@@ -1307,13 +1307,13 @@ def main():
     )
     parser.add_argument(
         "--success-csv",
-        default="./result/import_success.csv",
-        help="Path to success records CSV file (default: import_success.csv)",
+        default="./result/locomo/import_success.csv",
+        help="Path to success records CSV file (default: ./result/locomo/import_success.csv)",
     )
     parser.add_argument(
         "--error-log",
-        default="./result/import_errors.log",
-        help="Path to error log file (default: import_errors.log)",
+        default="./result/locomo/import_errors.log",
+        help="Path to error log file (default: ./result/locomo/import_errors.log)",
     )
     parser.add_argument(
         "--openviking-url",

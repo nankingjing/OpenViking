@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -18,6 +19,17 @@ from progress_utils import (
 # 加载本地环境变量文件
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
+
+
+def format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
 
 
 async def grade_answer(
@@ -99,8 +111,8 @@ async def main():
     )
     parser.add_argument(
         "--input",
-        default="./result/locomo_qa_result_only_sys_memory.csv",
-        help="Path to QA result csv file, default: ./result/locomo_qa_result.csv",
+        default="./result/locomo/locomo_qa_result_only_sys_memory.csv",
+        help="Path to QA result csv file, default: ./result/locomo/locomo_qa_result.csv",
     )
     parser.add_argument(
         "--base-url",
@@ -126,6 +138,7 @@ async def main():
         help="Disable the live progress bar (fall back to line-by-line logs). Auto-disabled when stderr is not a TTY.",
     )
     args = parser.parse_args()
+    started_at = time.perf_counter()
 
     if not args.token:
         print("Error: API token is required")
@@ -215,7 +228,11 @@ async def main():
     correct = sum(1 for row in rows if row.get("result") == "CORRECT")
     total_graded = sum(1 for row in rows if row.get("result"))
     accuracy = correct / total_graded if total_graded > 0 else 0.0
-    print(f"\nGrading completed: {correct}/{total_graded} correct, accuracy: {accuracy:.2%}")
+    elapsed = format_duration(time.perf_counter() - started_at)
+    print(
+        f"\nGrading completed: {correct}/{total_graded} correct, "
+        f"accuracy: {accuracy:.2%}, elapsed: {elapsed}"
+    )
     print(f"All results saved to {args.input}")
 
 
