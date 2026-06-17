@@ -66,7 +66,7 @@ def create_app(
             backend=backend,
             options={
                 **options,
-                "show_progress": options.get("show_progress", True),
+                "show_progress": options.get("show_progress", False),
                 "progress_label": options.get("progress_label") or "tau2",
             },
             config_path=config_path,

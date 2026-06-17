@@ -421,4 +421,7 @@ def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
     assert isinstance(executor, FakeExecutor)
     assert calls[-1]["factory"]["backend"] == "vikingbot"
     assert calls[-1]["factory"]["options"]["max_iterations"] == 5
+    assert calls[-1]["factory"]["options"]["show_progress"] is False
+
+    app["make_rollout_executor"]({"rollout_backend": "native", "show_progress": True})
     assert calls[-1]["factory"]["options"]["show_progress"] is True
