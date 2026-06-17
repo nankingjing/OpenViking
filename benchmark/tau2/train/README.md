@@ -65,7 +65,8 @@ bash benchmark/tau2/train/run_batch_train_eval.sh \
 The runner evaluates the test split before training automatically. For the same
 dataset/domain, `--eval-limit`, `--trials`, and rollout options, this baseline is
 cached under `result/tau2/train/cache/baseline/` and reused by later runs. Use
-`--force-baseline-recompute` to refresh it.
+`--force-baseline-recompute` to refresh it. The Tau2 wrapper also runs a test
+rollout after each training epoch so you can track held-out score progression.
 
 ```bash
 bash benchmark/tau2/train/run_batch_train_eval.sh \
@@ -108,7 +109,7 @@ Default concurrency and output behavior:
 | `--eval-limit` | unlimited | Cap eval split size (for smoke tests) |
 | `--max-iterations` | `30` | Max steps per rollout |
 | `--force-baseline-recompute` | off | Recompute cached pre-training test baseline instead of reusing it |
-| `--eval-each-epoch` | off | Run held-out eval after every training epoch |
+| `--eval-each-epoch` | on in Tau2 wrapper | Run held-out eval after every training epoch |
 | `--clean-result` / `--no-clean-result` | clean | Whether to wipe previous result artifacts |
 | `--output` | auto | JSON report output path |
 | `--events-output` | auto | Streaming JSONL event output path |

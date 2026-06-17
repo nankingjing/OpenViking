@@ -496,8 +496,9 @@ def _epoch_eval_context(ctx: PipelineContext, *, epoch: int) -> PipelineContext:
         **dict(ctx.execution_metadata),
         "epoch": epoch,
         "training": False,
+        "rollout_stage": "test_rollout",
+        "eval_split": "test",
     }
-    execution_metadata.pop("rollout_stage", None)
     return PipelineContext(
         case_load_context=ctx.case_load_context,
         snapshot_context=ctx.snapshot_context,

@@ -111,6 +111,7 @@ class BatchTrainEvalReport:
     policy_root_uri: str
     baseline_eval: dict[str, Any] | None
     train_epochs: list[dict[str, Any]] = field(default_factory=list)
+    epoch_evals: list[dict[str, Any]] = field(default_factory=list)
     final_eval: dict[str, Any] | None = None
     accuracy_delta: float | None = None
     output_path: str | None = None
@@ -142,6 +143,7 @@ class BatchTrainEvalReport:
             "policy_root_uri": self.policy_root_uri,
             "baseline_eval": self.baseline_eval,
             "train_epochs": self.train_epochs,
+            "epoch_evals": self.epoch_evals,
             "final_eval": self.final_eval,
             "accuracy_delta": self.accuracy_delta,
             "output_path": self.output_path,
@@ -311,6 +313,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             policy_root_uri=policy_root_uri,
             baseline_eval=baseline_eval,
             train_epochs=list(train_result.metadata.get("train_reports", [])),
+            epoch_evals=_epoch_eval_reports(train_result),
             final_eval=final_eval,
             accuracy_delta=accuracy_delta,
             output_path=_default_output_path(config),
@@ -399,6 +402,15 @@ def _build_http_client(config: BatchTrainEvalConfig) -> AsyncHTTPClient:
         timeout=max(60.0, (config.commit_timeout_seconds or 600.0) + 30.0),
     )
 
+
+
+def _epoch_eval_reports(train_result: Any) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    for evaluation in getattr(train_result, "evaluation_passes", []) or []:
+        report = getattr(evaluation, "metadata", {}).get("report")
+        if isinstance(report, dict):
+            reports.append(dict(report))
+    return reports
 
 
 def _policy_set_metadata(config: BatchTrainEvalConfig, client: AsyncHTTPClient) -> dict[str, Any]:
