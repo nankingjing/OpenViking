@@ -7,7 +7,7 @@ from __future__ import annotations
 import inspect
 import sys
 from collections.abc import Awaitable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 try:  # pragma: no cover - cosmetic terminal rendering
@@ -216,6 +216,8 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
     """Default stdout lifecycle hook for batch train/eval runners."""
 
     use_rich: bool | None = None
+    _epoch_summaries: dict[int, dict[str, Any]] = field(init=False, default_factory=dict)
+    _printed_epoch_summaries: set[int] = field(init=False, default_factory=set)
 
     def __post_init__(self) -> None:
         if self.use_rich is None:
@@ -256,6 +258,9 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                     *_cost_field(report),
                 ],
             )
+            self._remember_eval_report(label, report)
+            if _is_epoch_test_report(label, report):
+                self._print_epoch_summary(int(report["epoch"]))
             return
         self._print_line(
             label,
@@ -277,6 +282,9 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                 *_cost_field(report),
             ],
         )
+        self._remember_eval_report(label, report)
+        if _is_epoch_test_report(label, report):
+            self._print_epoch_summary(int(report["epoch"]))
 
     def on_epoch_start(self, *, epoch: int, context: Any) -> None:
         del context
@@ -297,6 +305,7 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
         context: Any,
     ) -> None:
         del context
+        self._remember_train_rollout_report(report)
         self._print_line(
             "train_rollout",
             [
@@ -323,7 +332,7 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
         report: dict[str, Any],
         context: Any,
     ) -> None:
-        del context
+        self._remember_train_report(report)
         error_count = len(report["errors"])
         self._print_line(
             "train",
@@ -343,6 +352,8 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                 print("[train] failed_commit_trace_ids=<none>")
             if telemetry_ids:
                 print(f"[train] failed_commit_telemetry_ids={','.join(telemetry_ids)}")
+        if not _has_epoch_eval(context):
+            self._print_epoch_summary(int(report["epoch"]))
 
     def on_run_summary(
         self,
@@ -381,7 +392,7 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
             print(
                 f"[{label}] "
                 + " ".join(
-                    f"{item[0]}={item[1]}" if item[0] else str(item[1])
+                    _plain_field(item)
                     for item in fields
                 )
             )
@@ -398,6 +409,59 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                 line.append(f"{key}=", style="dim")
             line.append(value, style=value_style)
         console.print(line)
+
+    def _remember_train_rollout_report(self, report: dict[str, Any]) -> None:
+        epoch = _report_epoch(report)
+        if epoch is None:
+            return
+        self._epoch_summaries.setdefault(epoch, {})["train_rollout"] = dict(report)
+
+    def _remember_train_report(self, report: dict[str, Any]) -> None:
+        epoch = _report_epoch(report)
+        if epoch is None:
+            return
+        self._epoch_summaries.setdefault(epoch, {})["train"] = dict(report)
+
+    def _remember_eval_report(self, label: str, report: dict[str, Any]) -> None:
+        epoch = _report_epoch(report)
+        if epoch is None:
+            return
+        self._epoch_summaries.setdefault(epoch, {})["test"] = {
+            **dict(report),
+            "label": label,
+        }
+
+    def _print_epoch_summary(self, epoch: int) -> None:
+        if epoch in self._printed_epoch_summaries:
+            return
+        summary = self._epoch_summaries.get(epoch) or {}
+        train_data = _summary_train_report(summary)
+        test_data = summary.get("test")
+        if train_data is None and test_data is None:
+            return
+        self._printed_epoch_summaries.add(epoch)
+
+        header = f" epoch {epoch} summary "
+        width = max(44, len(header) + 8)
+        left = max((width - len(header)) // 2, 1)
+        right = max(width - len(header) - left, 1)
+        border_top = f"{'=' * left}{header}{'=' * right}"
+        border_bottom = "=" * len(border_top)
+        self._print_summary_fragments([(border_top, "cyan bold")])
+        if train_data is not None:
+            self._print_summary_fragments(_train_summary_fragments(train_data))
+        if test_data is not None:
+            self._print_summary_fragments(_test_summary_fragments(test_data))
+        self._print_summary_fragments([(border_bottom, "cyan bold")])
+
+    def _print_summary_fragments(self, fragments: list[tuple[str, str]]) -> None:
+        if not self.use_rich:
+            print("".join(_style_plain(text, style) for text, style in fragments))
+            return
+        line = Text()
+        for text, style in fragments:
+            line.append(text, style=style or "default")
+        Console().print(line)
 
     def _report_eval_line(self, label: str, data: dict[str, Any]) -> None:
         trial_count = int(data.get("trial_count") or 1)
@@ -432,6 +496,111 @@ def _split_field(split: Any) -> list[tuple[str, str, str]]:
     if split is None:
         return []
     return [("split", str(split), "cyan")]
+
+
+def _plain_field(item: tuple[Any, ...]) -> str:
+    text = f"{item[0]}={item[1]}" if item[0] else str(item[1])
+    if len(item) <= 2 or item[0] != "accuracy":
+        return text
+    return f"accuracy={_style_plain(str(item[1]), str(item[2]))}"
+
+
+def _style_plain(text: str, style: str) -> str:
+    if not style:
+        return text
+    parts: list[str] = []
+    style_tokens = set(style.split())
+    if "bold" in style_tokens:
+        parts.append("1")
+    if "red" in style_tokens:
+        parts.append("31")
+    elif "green" in style_tokens:
+        parts.append("32")
+    elif "yellow" in style_tokens:
+        parts.append("33")
+    elif "cyan" in style_tokens:
+        parts.append("36")
+    elif "magenta" in style_tokens:
+        parts.append("35")
+    if not parts:
+        return text
+    return f"\033[{';'.join(parts)}m{text}\033[0m"
+
+
+def _report_epoch(report: dict[str, Any]) -> int | None:
+    try:
+        return int(report["epoch"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _has_epoch_eval(context: Any) -> bool:
+    return getattr(context, "eval_each_epoch_case_loader", None) is not None
+
+
+def _is_epoch_test_report(label: str, report: dict[str, Any]) -> bool:
+    return (
+        str(label) == "test_rollout"
+        and report.get("epoch") is not None
+        and int(report.get("epoch") or 0) >= 0
+    )
+
+
+def _summary_train_report(summary: dict[str, Any]) -> dict[str, Any] | None:
+    train_rollout = summary.get("train_rollout")
+    if isinstance(train_rollout, dict):
+        return train_rollout
+    train = summary.get("train")
+    if isinstance(train, dict):
+        nested = train.get("train_rollout")
+        if isinstance(nested, dict):
+            return nested
+    return None
+
+
+def _train_summary_fragments(data: dict[str, Any]) -> list[tuple[str, str]]:
+    accuracy = data.get("accuracy")
+    passed = data.get("passed_count")
+    total = data.get("case_count")
+    avg_reward = data.get("average_reward")
+    fragments = [
+        ("TRAIN accuracy: ", "bold"),
+        (fmt_percent(accuracy), _accuracy_style(accuracy)),
+    ]
+    if passed is not None and total is not None:
+        fragments.extend([("  passed=", "default"), (f"{passed}/{total}", _passed_style(data))])
+    fragments.extend([("  avg_reward=", "default"), (fmt_score(avg_reward), "bold")])
+    return fragments
+
+
+def _test_summary_fragments(data: dict[str, Any]) -> list[tuple[str, str]]:
+    trial_count = int(data.get("trial_count") or 1)
+    if trial_count > 1:
+        accuracy = data.get("accuracy_mean")
+        fragments = [
+            ("TEST  accuracy: ", "bold"),
+            (fmt_percent(accuracy), _accuracy_style(accuracy)),
+            (" ± ", "default"),
+            (fmt_percentage_point_abs(data.get("accuracy_std")), "yellow"),
+            ("  avg_reward=", "default"),
+            (fmt_score(data.get("average_reward_mean")), "bold"),
+            (" ± ", "default"),
+            (fmt_score(data.get("average_reward_std")), "yellow"),
+            ("  trials=", "default"),
+            (str(trial_count), "cyan"),
+        ]
+        return fragments
+
+    accuracy = data.get("accuracy")
+    fragments = [
+        ("TEST  accuracy: ", "bold"),
+        (fmt_percent(accuracy), _accuracy_style(accuracy)),
+        ("  passed=", "default"),
+        (f"{data.get('passed_count')}/{data.get('case_count')}", _passed_style(data)),
+        ("  avg_reward=", "default"),
+        (fmt_score(data.get("average_reward")), "bold"),
+    ]
+    return fragments
 
 
 def fmt_score(value: Any) -> str:

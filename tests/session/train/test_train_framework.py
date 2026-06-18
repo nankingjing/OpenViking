@@ -32,6 +32,7 @@ from openviking.session.train import (
     RubricEvaluation,
     Trajectory,
 )
+from openviking.session.train.components.reporter import ConsolePipelineReporter
 from openviking.storage.transaction import init_lock_manager, reset_lock_manager
 
 
@@ -1292,6 +1293,61 @@ def test_rollout_artifact_recorder_keeps_baseline_and_final_eval_dirs(tmp_path):
     group_dir = tmp_path / "rollouts" / "airline_test_task_0_2"
     assert (group_dir / "baseline_test" / "trial_0" / "status.json").exists()
     assert (group_dir / "final_test" / "trial_0" / "status.json").exists()
+
+
+def test_console_reporter_highlights_accuracy_and_prints_epoch_summary(capsys):
+    reporter = ConsolePipelineReporter(use_rich=False)
+    context = PipelineContext(eval_each_epoch_case_loader=object())
+
+    reporter.on_train_rollout_report(
+        report={
+            "epoch": 1,
+            "case_count": 30,
+            "accuracy": 0.6,
+            "passed_count": 18,
+            "average_reward": 0.6,
+        },
+        context=context,
+    )
+    reporter.on_train_report(
+        report={
+            "epoch": 1,
+            "committed_rollout_count": 30,
+            "errors": [],
+            "train_rollout": {
+                "epoch": 1,
+                "case_count": 30,
+                "accuracy": 0.6,
+                "passed_count": 18,
+                "average_reward": 0.6,
+            },
+        },
+        context=context,
+    )
+    reporter.on_eval_report(
+        label="test_rollout",
+        report={
+            "epoch": 1,
+            "rollout_stage": "test_rollout",
+            "split": "test",
+            "trial_count": 8,
+            "case_count": 160,
+            "total_rollout_count": 160,
+            "case_count_per_trial": 20,
+            "accuracy_mean": 0.58125,
+            "accuracy_std": 0.055551,
+            "average_reward_mean": 0.58125,
+            "average_reward_std": 0.055551,
+        },
+        context=context,
+    )
+
+    output = capsys.readouterr().out
+
+    assert "accuracy=\x1b[1;33m60.00%\x1b[0m" in output
+    assert "epoch 1 summary" in output
+    assert "TRAIN accuracy: \x1b[0m\x1b[1;33m60.00%\x1b[0m" in output
+    assert "TEST  accuracy: \x1b[0m\x1b[1;33m58.13%\x1b[0m" in output
 
 
 def test_rollout_artifact_event_recorder_enriches_commit_result(tmp_path):
