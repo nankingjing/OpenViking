@@ -367,7 +367,12 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_langu
         "listed required action families with matching argument semantics, include every "
         "required communication item/literal in a customer-facing `communicate_with_user` "
         "message, and do not let later conversational hesitation, a narrower cost comparison, "
-        "or a generic policy-only refusal replace the required evaluated sequence."
+        "or a generic policy-only refusal replace the required evaluated sequence. When the "
+        "case memory exposes full expected tool arguments, prefer those recalled argument "
+        "semantics over re-derived alternatives, including payment allocation and add-on "
+        "counts. After completing the matched expected state-changing sequence, do not undo, "
+        "reverse, restore, compensate, or transfer away from that evaluated final state unless "
+        "the same matched case memory explicitly lists such a later corrective action."
     )
     if rollout_language == "zh":
         instructions.append(
