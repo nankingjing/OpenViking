@@ -265,21 +265,19 @@ class RemoteRolloutExecutor:
 def _progress_stage_label(stage: Any, *, default: str) -> str:
     stage_text = str(stage or "")
     stage_name = stage_text.split(maxsplit=1)[0]
-    if stage_name in {
-        "train_rollout",
-        "test_rollout",
-        "baseline_test_rollout",
-        "final_test_rollout",
-    }:
+    if _is_progress_stage_name(stage_name):
         return f"{stage_name}_start"
-    if stage_name in {
-        "train_rollout_start",
-        "test_rollout_start",
-        "baseline_test_rollout_start",
-        "final_test_rollout_start",
-    }:
+    if stage_name.endswith("_start") and _is_progress_stage_name(stage_name[:-6]):
         return stage_name
     return default
+
+
+def _is_progress_stage_name(stage_name: str) -> bool:
+    return (
+        stage_name == "train_rollout"
+        or stage_name == "test_rollout"
+        or stage_name.endswith("_rollout")
+    )
 
 
 def _remote_execution_options(options: dict[str, Any]) -> dict[str, Any]:

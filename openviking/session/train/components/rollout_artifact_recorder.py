@@ -723,10 +723,16 @@ def _rollout_name(record: _RolloutRecord) -> str:
 
 
 def _stage_dir(label: str, *, epoch: int | None = None) -> str:
-    if label == "baseline_test_rollout":
-        return "baseline_test"
-    if label == "final_test_rollout":
-        return "final_test"
+    if label.startswith("baseline_") and label.endswith("_rollout"):
+        split = label.removeprefix("baseline_").removesuffix("_rollout")
+        return f"baseline_{_safe_fragment(split)}"
+    if label.startswith("final_") and label.endswith("_rollout"):
+        split = label.removeprefix("final_").removesuffix("_rollout")
+        return f"final_{_safe_fragment(split)}"
+    if label.startswith("epoch_") and label.endswith("_rollout"):
+        split = label.removeprefix("epoch_").removesuffix("_rollout")
+        prefix = _safe_fragment(split)
+        return prefix if epoch is None else f"{prefix}_epoch_{epoch}"
     if label == "test_rollout":
         return "test" if epoch is None else f"test_epoch_{epoch}"
     return _safe_fragment(label)

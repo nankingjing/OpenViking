@@ -429,6 +429,38 @@ async def test_train_runs_test_eval_after_each_epoch_when_configured():
 
 
 @pytest.mark.asyncio
+async def test_train_epoch_eval_uses_configured_split_metadata():
+    hook = RecordingLifecycleHook()
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=DummySnapshotter(),
+        rollout_executor=DummyExecutor(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+
+    result = await pipeline.train(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=_policy_set(),
+        context=PipelineContext(
+            max_epochs=1,
+            eval_each_epoch_case_loader=ListCaseLoader([_case()]),
+            execution_metadata={
+                "rollout_stage": "epoch_train_rollout",
+                "eval_split": "train",
+            },
+            lifecycle_hooks=[PipelineReportHook(), hook],
+        ),
+    )
+
+    assert len(result.evaluation_passes) == 1
+    assert result.evaluation_passes[0].metadata.get("rollout_stage") == "epoch_train_rollout"
+    assert result.evaluation_passes[0].metadata.get("eval_split") == "train"
+    assert ("eval_report", "epoch_train_rollout", 0) in hook.events
+
+
+@pytest.mark.asyncio
 async def test_offline_policy_optimization_pipeline_epoch_hook_can_stop_training():
     pipeline = OfflinePolicyOptimizationPipeline(
         snapshotter=DummySnapshotter(),

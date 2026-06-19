@@ -103,14 +103,31 @@ The runner evaluates the test split before training automatically. For the same
 dataset/domain, `--eval-index`, `--trials`, and rollout options, this baseline is
 cached under `result/tau2/train/cache/baseline/` and reused by later runs. Normal
 runs do not recompute the baseline when this cache hits; pass
-`--force-baseline-recompute` only when you intentionally want to refresh it. The
-Tau2 wrapper also runs a test rollout after each training epoch so you can track
-held-out score progression.
+`--force-baseline-recompute` only when you intentionally want to refresh it. Use
+`--skip-baseline-eval` to skip this pre-training baseline entirely. The Tau2
+wrapper also runs an eval rollout after each training epoch so you can track
+score progression. By default that eval uses the held-out `test` split; pass
+`--eval-split train` to evaluate on train tasks instead, or `--eval-split none`
+to disable eval.
 
 ```bash
 bash benchmark/tau2/train/run_batch_train_eval.sh \
   --epochs 4 \
   --trials 8
+```
+
+Train one task and evaluate the same train task for 8 trials after each epoch
+(no test split, no pre-training baseline, no extra final eval):
+
+```bash
+bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
+  --epochs 2 \
+  --train-index 14 \
+  --eval-split train \
+  --eval-index 14 \
+  --trials 8 \
+  --skip-baseline-eval \
+  --skip-final-eval
 ```
 
 ## 5. Defaults and options
@@ -144,11 +161,13 @@ Default concurrency and output behavior:
 | `--commit-concurrency` | `100` | Max concurrent `session.commit` submissions during training |
 | `--trials` | `8` | Run each eval case N times and aggregate scores |
 | `--train-index` | all | Run only the train sample at this 0-based split index |
-| `--eval-index` | all | Run only the eval/test sample at this 0-based split index |
+| `--eval-split` | `test` | Split used for baseline/per-epoch/final eval: `test`, `train`, or `none` |
+| `--eval-index` | all | Run only the eval sample at this 0-based split index within `--eval-split` |
 | `--max-iterations` | `30` | Max steps per rollout |
-| `--force-baseline-recompute` | off | Recompute cached pre-training test baseline instead of reusing it |
-| `--eval-each-epoch` | on in Tau2 wrapper | Run held-out eval after every training epoch |
-| `--skip-final-eval` | off; on in one-click launcher | Skip the extra final held-out eval pass |
+| `--force-baseline-recompute` | off | Recompute cached pre-training baseline instead of reusing it |
+| `--skip-baseline-eval` | off | Skip pre-training baseline eval/cache entirely |
+| `--eval-each-epoch` | on in Tau2 wrapper | Run eval after every training epoch using `--eval-split` |
+| `--skip-final-eval` | off; on in one-click launcher | Skip the extra final eval pass |
 | `--clean-result` / `--no-clean-result` | clean | Whether to prune previous result artifacts |
 | `--keep-recent-results` | `5` | Number of recent default `run_` directories to keep when cleaning; cache and non-`run_` directories are preserved |
 | `--output` | auto | JSON report output path |
@@ -162,7 +181,7 @@ Default concurrency and output behavior:
 
 ### Examples
 
-Quick smoke test (1 train, 1 eval, 1 trial):
+Quick smoke test (1 train, 1 test eval, 1 trial):
 
 ```bash
 bash benchmark/tau2/train/run_batch_train_eval.sh \

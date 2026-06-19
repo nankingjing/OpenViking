@@ -492,12 +492,13 @@ async def _emit_eval_end(
 
 
 def _epoch_eval_context(ctx: PipelineContext, *, epoch: int) -> PipelineContext:
+    inherited_metadata = dict(ctx.execution_metadata)
     execution_metadata = {
-        **dict(ctx.execution_metadata),
+        **inherited_metadata,
         "epoch": epoch,
         "training": False,
-        "rollout_stage": "test_rollout",
-        "eval_split": "test",
+        "rollout_stage": inherited_metadata.get("rollout_stage") or "test_rollout",
+        "eval_split": inherited_metadata.get("eval_split") or "test",
     }
     return PipelineContext(
         case_load_context=ctx.case_load_context,

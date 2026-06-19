@@ -65,7 +65,9 @@ class BatchTrainEvalConfig:
     eval_index: int | None = None
     benchmark_service_url: str | None = None
     baseline_force_recompute: bool = False
+    skip_baseline_eval: bool = False
     eval_each_epoch: bool = False
+    eval_split: str | None = "test"
     skip_final_eval: bool = False
     trials: int = 8
     clean_result: bool = True
@@ -96,6 +98,14 @@ class BatchTrainEvalConfig:
             raise ValueError("train_index must be >= 0")
         if self.eval_index is not None and self.eval_index < 0:
             raise ValueError("eval_index must be >= 0")
+        if self.eval_split is not None:
+            normalized_eval_split = str(self.eval_split).strip().lower()
+            if normalized_eval_split in {"", "none"}:
+                self.eval_split = None
+            elif normalized_eval_split not in {"train", "test"}:
+                raise ValueError("eval_split must be train, test, or none")
+            else:
+                self.eval_split = normalized_eval_split
         if self.trials <= 0:
             raise ValueError("trials must be > 0")
         if self.benchmark_service_url is not None and not self.benchmark_service_url.strip():
@@ -128,6 +138,8 @@ class BatchTrainEvalReport:
     server_url: str = ""
     benchmark_service_url: str | None = None
     eval_each_epoch: bool = False
+    eval_split: str | None = "test"
+    skip_baseline_eval: bool = False
     trials: int = 8
     rollouts_root: str | None = None
     rollouts_index_path: str | None = None
@@ -163,6 +175,8 @@ class BatchTrainEvalReport:
             "server_url": self.server_url,
             "benchmark_service_url": self.benchmark_service_url,
             "eval_each_epoch": self.eval_each_epoch,
+            "eval_split": self.eval_split,
+            "skip_baseline_eval": self.skip_baseline_eval,
             "trials": self.trials,
             "rollouts_root": self.rollouts_root,
             "rollouts_index_path": self.rollouts_index_path,
@@ -214,8 +228,14 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             clean_result=config.clean_result,
             keep_recent_results=config.keep_recent_results,
             baseline_force_recompute=config.baseline_force_recompute,
+            skip_baseline_eval=config.skip_baseline_eval,
+            eval_split=config.eval_split,
             skip_final_eval=config.skip_final_eval,
-            baseline_cache_path=str(_baseline_cache_path(config)),
+            baseline_cache_path=(
+                None
+                if config.skip_baseline_eval or config.eval_split is None
+                else str(_baseline_cache_path(config))
+            ),
         )
         policy_trainer = SessionCommitPolicyTrainer(
             client=client,
@@ -244,28 +264,41 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
 
         baseline_eval: dict[str, Any] | None = None
         baseline_cache_hit = False
-        baseline_cache_path = _baseline_cache_path(config)
+        baseline_cache_path = (
+            None
+            if config.skip_baseline_eval or config.eval_split is None
+            else _baseline_cache_path(config)
+        )
         final_eval: dict[str, Any] | None = None
         report_builder = PipelineReportBuilder(trial_index_key="eval_trial")
 
-        test_loader = _case_loader(config, split="test", sample_index=config.eval_index)
-        if await test_loader.split_exists():
+        eval_loader = (
+            None
+            if config.eval_split is None
+            else _case_loader(config, split=config.eval_split, sample_index=config.eval_index)
+        )
+        if (
+            eval_loader is not None
+            and not config.skip_baseline_eval
+            and await eval_loader.split_exists()
+        ):
             baseline_result, baseline_cache_hit = await _load_or_run_baseline_eval(
                 config=config,
                 pipeline=pipeline,
-                case_loader=test_loader,
+                case_loader=eval_loader,
                 policy_set=policy_set,
                 report_builder=report_builder,
                 event_recorder=event_recorder,
             )
             if baseline_result is not None:
                 rollout_artifact_recorder.record_eval(
-                    label="baseline_test_rollout",
+                    label=_eval_rollout_stage("baseline", config.eval_split),
                     epoch=-1,
                     analyses=baseline_result.analyses,
                 )
                 baseline_eval = baseline_result.metadata["report"]
             else:
+                assert baseline_cache_path is not None
                 baseline_eval = _load_baseline_cache(baseline_cache_path)
                 if baseline_eval is not None:
                     _print_baseline_cache_hit(baseline_eval, baseline_cache_path)
@@ -276,9 +309,21 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             epoch=0,
             training=True,
             max_epochs=config.epochs,
-            eval_each_epoch_case_loader=test_loader
-            if config.eval_each_epoch and await test_loader.split_exists()
-            else None,
+            eval_each_epoch_case_loader=(
+                eval_loader
+                if (
+                    eval_loader is not None
+                    and config.eval_each_epoch
+                    and await eval_loader.split_exists()
+                )
+                else None
+            ),
+            rollout_stage=(
+                _eval_rollout_stage("epoch", config.eval_split)
+                if config.eval_split is not None
+                else None
+            ),
+            eval_split=config.eval_split,
             eval_trials=config.trials,
             trial_index_key="eval_trial",
             report_builder=report_builder,
@@ -305,16 +350,16 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             if epoch_eval_reports:
                 final_eval = dict(epoch_eval_reports[-1])
                 final_eval_source = "last_epoch_eval"
-        elif await test_loader.split_exists():
+        elif eval_loader is not None and await eval_loader.split_exists():
             final_result = await pipeline.eval(
-                case_loader=test_loader,
+                case_loader=eval_loader,
                 policy_set=policy_set,
                 context=_pipeline_context(
                     epoch=config.epochs,
                     training=False,
                     max_epochs=1,
-                    rollout_stage="final_test_rollout",
-                    eval_split="test",
+                    rollout_stage=_eval_rollout_stage("final", config.eval_split),
+                    eval_split=config.eval_split,
                     eval_trials=config.trials,
                     trial_index_key="eval_trial",
                     report_builder=report_builder,
@@ -322,12 +367,12 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 ),
             )
             rollout_artifact_recorder.record_eval(
-                label="final_test_rollout",
+                label=_eval_rollout_stage("final", config.eval_split),
                 epoch=config.epochs,
                 analyses=final_result.analyses,
             )
             final_eval = final_result.metadata["report"]
-            final_eval_source = "final_test"
+            final_eval_source = f"final_{config.eval_split}"
 
         accuracy_delta = report_builder.accuracy_delta(baseline_eval, final_eval)
         rollout_artifact_index = rollout_artifact_recorder.finalize()
@@ -352,6 +397,8 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             server_url=client_url(client),
             benchmark_service_url=config.benchmark_service_url,
             eval_each_epoch=config.eval_each_epoch,
+            eval_split=config.eval_split,
+            skip_baseline_eval=config.skip_baseline_eval,
             trials=config.trials,
             rollouts_root=rollout_artifact_index.rollouts_root,
             rollouts_index_path=str(run_dir / "rollouts_index.json"),
@@ -359,7 +406,9 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             clean_result=config.clean_result,
             keep_recent_results=config.keep_recent_results,
             events_path=str(_events_path(config)),
-            baseline_cache_path=str(baseline_cache_path),
+            baseline_cache_path=(
+                str(baseline_cache_path) if baseline_cache_path is not None else None
+            ),
             baseline_cache_hit=baseline_cache_hit,
             baseline_force_recompute=config.baseline_force_recompute,
             skip_final_eval=config.skip_final_eval,
@@ -389,6 +438,8 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 "run_id": policy_trainer.run_id,
                 "trace_id": report.trace_id,
                 "baseline_cache_hit": report.baseline_cache_hit,
+                "skip_baseline_eval": report.skip_baseline_eval,
+                "eval_split": report.eval_split,
                 "skip_final_eval": report.skip_final_eval,
                 "final_eval_source": report.final_eval_source,
             },
@@ -478,6 +529,7 @@ async def _load_or_run_baseline_eval(
                 "baseline_cache_hit",
                 stage="baseline_cache",
                 baseline_cache_path=str(cache_path),
+                eval_split=config.eval_split,
             )
             return None, True
 
@@ -485,6 +537,7 @@ async def _load_or_run_baseline_eval(
         "baseline_cache_recompute" if cache_path.exists() else "baseline_cache_miss",
         stage="baseline_cache",
         baseline_cache_path=str(cache_path),
+        eval_split=config.eval_split,
     )
     baseline_result = await pipeline.eval(
         case_loader=case_loader,
@@ -493,8 +546,8 @@ async def _load_or_run_baseline_eval(
             epoch=-1,
             training=False,
             max_epochs=1,
-            rollout_stage="baseline_test_rollout",
-            eval_split="test",
+            rollout_stage=_eval_rollout_stage("baseline", config.eval_split),
+            eval_split=config.eval_split,
             eval_trials=config.trials,
             trial_index_key="eval_trial",
             report_builder=report_builder,
@@ -506,6 +559,7 @@ async def _load_or_run_baseline_eval(
         "baseline_cache_write",
         stage="baseline_cache",
         baseline_cache_path=str(cache_path),
+        eval_split=config.eval_split,
     )
     return baseline_result, False
 
@@ -521,7 +575,7 @@ def _write_baseline_cache(
         "cache_key": _baseline_cache_key(config),
         "dataset": config.dataset,
         "domain": config.domain,
-        "split": "test",
+        "split": config.eval_split,
         "eval_index": config.eval_index,
         "trials": config.trials,
         "max_iterations": config.max_iterations,
@@ -558,7 +612,7 @@ def _print_baseline_cache_hit(report: dict[str, Any], cache_path: Path) -> None:
         accuracy_std = report.get("accuracy_std")
         cases_per_trial = report.get("case_count_per_trial") or "varies"
         print(
-            f"[baseline_test_rollout] baseline_cache_hit=1 accuracy="
+            f"[{report.get('rollout_stage') or 'baseline_eval'}] baseline_cache_hit=1 accuracy="
             f"{_fmt_percent(accuracy_mean)} ± {_fmt_pp_abs(accuracy_std)} "
             f"trials={trial_count} cases_per_trial={cases_per_trial}"
             f"{cache_info}"
@@ -568,11 +622,16 @@ def _print_baseline_cache_hit(report: dict[str, Any], cache_path: Path) -> None:
     passed = report.get("passed_count")
     total = report.get("case_count")
     print(
-        f"[baseline_test_rollout] baseline_cache_hit=1 accuracy={_fmt_percent(accuracy)} "
+        f"[{report.get('rollout_stage') or 'baseline_eval'}] baseline_cache_hit=1 "
+        f"accuracy={_fmt_percent(accuracy)} "
         f"passed={passed}/{total}"
         f"{cache_info}"
     )
 
+
+def _eval_rollout_stage(kind: str, split: str | None) -> str:
+    eval_split = str(split or "test")
+    return f"{kind}_{eval_split}_rollout"
 
 def _fmt_percent(value: Any) -> str:
     if value is None:
@@ -742,7 +801,7 @@ def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
     payload = {
         "dataset": config.dataset,
         "domain": config.domain,
-        "split": "test",
+        "split": config.eval_split,
         "eval_index": config.eval_index,
         "trials": config.trials,
         "max_iterations": config.max_iterations,
@@ -751,7 +810,8 @@ def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
     index = "all" if config.eval_index is None else str(config.eval_index)
-    return f"{_cache_slug(config.domain)}_test_index-{index}_trials-{config.trials}_{digest}"
+    split = _cache_slug(str(config.eval_split or "none"))
+    return f"{_cache_slug(config.domain)}_{split}_index-{index}_trials-{config.trials}_{digest}"
 
 
 def _cache_slug(value: str) -> str:

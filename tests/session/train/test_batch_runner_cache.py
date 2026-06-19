@@ -14,7 +14,7 @@ from openviking.session.train.batch_runner import (
 )
 
 
-def test_baseline_cache_key_depends_on_trials_and_eval_index():
+def test_baseline_cache_key_depends_on_trials_eval_index_and_split():
     base = BatchTrainEvalConfig(
         dataset="tau2",
         domain="airline",
@@ -46,6 +46,16 @@ def test_baseline_cache_key_depends_on_trials_and_eval_index():
             dataset="tau2",
             domain="airline",
             eval_index=10,
+            trials=8,
+            benchmark_service_url="http://127.0.0.1:1944",
+        )
+    )
+    assert _baseline_cache_key(base) != _baseline_cache_key(
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            eval_split="train",
+            eval_index=25,
             trials=8,
             benchmark_service_url="http://127.0.0.1:1944",
         )
@@ -202,6 +212,8 @@ def test_case_loader_uses_sample_index_filter():
 
     assert train_loader.limit is None
     assert eval_loader.limit is None
+    assert train_loader.split == "train"
+    assert eval_loader.split == "test"
     assert train_loader.filters == {"task_indices": [7]}
     assert eval_loader.filters == {"task_indices": [3]}
     assert all_loader.filters == {}
@@ -232,3 +244,48 @@ def test_sample_indices_are_zero_based_and_may_be_zero():
             eval_index=-1,
             benchmark_service_url="http://127.0.0.1:1944",
         )
+
+
+def test_eval_split_normalization_and_validation():
+    train_config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        eval_split="TRAIN",
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+    none_config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        eval_split="none",
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    assert train_config.eval_split == "train"
+    assert none_config.eval_split is None
+
+    import pytest
+
+    with pytest.raises(ValueError, match="eval_split must be train, test, or none"):
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            eval_split="dev",
+            benchmark_service_url="http://127.0.0.1:1944",
+        )
+
+
+def test_eval_loader_can_target_train_split():
+    from openviking.session.train.batch_runner import _case_loader
+
+    config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        eval_split="train",
+        eval_index=14,
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    loader = _case_loader(config, split=config.eval_split, sample_index=config.eval_index)
+
+    assert loader.split == "train"
+    assert loader.filters == {"task_indices": [14]}

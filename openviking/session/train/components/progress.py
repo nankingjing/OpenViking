@@ -332,6 +332,6 @@ def label_style(label: str) -> str:
         "train_rollout",
         "test_rollout",
         "baseline_test_rollout",
-    }:
+    } or label.endswith("_rollout"):
         return "bold green"
     return "bold cyan"

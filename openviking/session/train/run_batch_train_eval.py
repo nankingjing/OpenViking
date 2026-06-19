@@ -74,9 +74,20 @@ def parse_args() -> argparse.Namespace:
         "--force-baseline-recompute",
         action="store_true",
         help=(
-            "Recompute the cached pre-training test baseline instead of reusing an "
+            "Recompute the cached pre-training baseline instead of reusing an "
             "existing cache file."
         ),
+    )
+    parser.add_argument(
+        "--skip-baseline-eval",
+        action="store_true",
+        help="Skip the pre-training baseline eval/cache step.",
+    )
+    parser.add_argument(
+        "--eval-split",
+        choices=("train", "test", "none"),
+        default="test",
+        help="Split used for baseline, per-epoch, and final eval (default: test; none disables eval).",
     )
     parser.add_argument(
         "--eval-each-epoch",
@@ -154,6 +165,8 @@ async def main_async() -> int:
             baseline_force_recompute=args.force_baseline_recompute,
             eval_each_epoch=args.eval_each_epoch,
             skip_final_eval=args.skip_final_eval,
+            skip_baseline_eval=args.skip_baseline_eval,
+            eval_split=args.eval_split,
             trials=args.trials,
             clean_result=args.clean_result,
             keep_recent_results=args.keep_recent_results,
