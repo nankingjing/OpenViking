@@ -28,8 +28,8 @@ Expected checks:
 
 ## Best tested result
 
-- Best commit in this worktree: `f4b911bd Tune tau2 memory gate extraction`
-- Best run: `result/tau2/train_1/run_airline_20260619_223605`
+- Best commit in this worktree: `e3d14047 Guard failed write experience branches`
+- Best run: `result/tau2/train_1/run_airline_20260619_230836`
 - Command shape:
   ```bash
   bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
@@ -43,10 +43,11 @@ Expected checks:
     --keep-recent-results 20 \
     --force-baseline-recompute
   ```
-- Baseline: `1/8 = 12.50%`
-- Final after epoch 1: `4/8 = 50.00%`
-- Delta: `+37.50pp`
-- Previous best: `42706c9f`, `3/8 = 37.50%`; keep `f4b911bd` as the new rollback point.
+- Baseline: `2/8 = 25.00%`
+- Epoch 0 eval: `3/8 = 37.50%`
+- Final after epoch 1: `8/8 = 100.00%`
+- Delta: `+75.00pp`
+- Previous best: `f4b911bd`, `4/8 = 50.00%`; keep `e3d14047` as the new rollback point.
 
 ## Current generic YAML strategy
 
@@ -61,20 +62,18 @@ The changes are intentionally generic, not case-specific:
 - Do not generate experiences whose applicability depends on future agents seeing hidden evaluation metadata such as `action_checks`, rubric, or CaseSpec.
 - Map evaluation-only failures to agent-visible gates when possible: object status, ownership, exact timestamp arithmetic, cabin/membership/insurance/refund prerequisites, confirmation, and target binding.
 - If an observable gate forbids a write, produce a narrow refusal/done or transfer boundary; the Approach must not call the forbidden state-changing tool.
-- For cancellation, require exact full timestamp arithmetic for 24-hour windows and never let user/support-rep claims override tool facts.
+- For failure/partial/unfinished trajectories, default to no-write gate/refusal/communication/done/transfer guardrails. Do not include a state-changing tool in Approach unless visible evaluation explicitly says that state-changing tool was missing and the actual trace did not already execute it unsuccessfully.
+- Terminal-action completeness for writes applies to successful trajectories or failures where evaluation explicitly says the write was missing; it must not override failure write-branch restrictions.
 
 ## Observed memory behavior in the best run
 
-Run `run_airline_20260619_223605` produced the intended second-epoch memory update:
+Run `run_airline_20260619_230836` produced the desired rollout behavior:
 
-- Epoch 0 still created a positive cancellation confirmation experience from a failed write; this made epoch-0 eval `0/8`.
-- Epoch 1 corrected it by updating the experience into a gate-first flow: verify cancellation eligibility; if ineligible, `communicate_with_user` then `done`; if eligible, list details, get explicit `yes`, then call `cancel_reservation`.
-- Epoch 1 final eval passed `4/8`. Passed trials avoided `cancel_reservation` and used `transfer_to_human_agents`/`done`; failed trials still called `cancel_reservation`.
+- Baseline still often called `cancel_reservation` and failed DB match.
+- Epoch 0 created a no-write cancellation eligibility experience, improving eval to `3/8`.
+- Epoch 1 retained/refined the no-write gate/refusal pattern; all 8 eval trials avoided `cancel_reservation` and ended via `transfer_to_human_agents`/`done`, reaching `8/8`.
+- The retrieved experience in epoch 1 allowed query/communication/done and explicitly forbade the state-changing cancellation tool unless eligibility gates are satisfied.
 
-## Next experiment ideas
+## Caution for mainline
 
-To improve beyond `4/8`, focus on making the first committed experience gate-first rather than requiring one extra epoch to correct it:
-
-- Tighten failure-to-experience creation so failed writes cannot create a positive write workflow just because the trace found an apparent eligibility path.
-- Require failed-write experiences to put eligibility/refusal gates before any write branch, and only include a write branch when the successful evaluated outcome or visible feedback explicitly supports the write.
-- Preserve generic wording; do not mention this case number, specific passenger, reservation ID, route, or exact timestamps in YAML rules.
+The YAML itself is generic. One generated experience in the best run still contained instance-specific timestamp/attribute examples in `Reflect`; this came from the memory extractor output, not from hard-coded YAML. If mainline wants stricter artifact cleanliness, add a separate generic rule that examples in generated experience memories must be abstracted unless they are stable policy constants.
