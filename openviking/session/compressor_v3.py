@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.context import Context
-from openviking.message import Message
+from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.dataclass import (
@@ -85,8 +85,28 @@ logger = get_logger(__name__)
 _CASES_MEMORY_TYPE = "cases"
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
+_TRAINING_ORACLE_SUMMARY_HEADER = "# OpenViking Training Oracle Summary v1"
 _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experiences"})
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+_EXPERIENCE_CONFLICT_TERMS = (
+    "不要",
+    "不得",
+    "不能",
+    "不应",
+    "严禁",
+    "禁止",
+    "拒绝",
+    "转人工",
+    "transfer",
+    "human agent",
+    "refuse",
+    "deny",
+    "do not",
+    "don't",
+    "must not",
+    "should not",
+    "cannot",
+)
 
 
 class SessionCompressorV3:
@@ -305,7 +325,7 @@ class SessionCompressorV3:
         contexts = _contexts_from_update_result(case_result)
         train_result = await self.train_from_extracted_cases(
             cases=[case],
-            messages=list(messages[1:]),
+            messages=_training_messages_after_case_spec(messages),
             ctx=ctx,
             session_id=session_id,
             archive_uri=archive_uri,
@@ -606,6 +626,7 @@ class SessionCompressorV3:
 
             submitted = 0
             skill_submitted = 0
+            filtered_exp_gradient_count = 0
             memory_diffs: list[dict[str, Any]] = []
             policy_snapshot_id = _commit_policy_snapshot_id(
                 session_id=session_id,
@@ -630,6 +651,12 @@ class SessionCompressorV3:
                     context=gradient_context,
                     viking_fs=viking_fs,
                 )
+                filtered_exp_gradients = _filter_oracle_conflicting_experience_gradients(
+                    gradients=exp_gradients,
+                    messages=messages,
+                )
+                filtered_exp_gradient_count += len(exp_gradients) - len(filtered_exp_gradients)
+                exp_gradients = filtered_exp_gradients
                 exp_training_result = _trajectory_only_training_result(
                     analysis=analysis,
                     rollout=rollout,
@@ -682,6 +709,7 @@ class SessionCompressorV3:
                 "case_count": len(cases),
                 "submitted": submitted,
                 "skill_submitted": skill_submitted,
+                "filtered_exp_gradient_count": filtered_exp_gradient_count,
             }
             if collect_memory_diff:
                 response["memory_diff"] = _merge_memory_diffs(
@@ -862,6 +890,56 @@ def _message_text(message: Message) -> str:
         if text:
             texts.append(str(text))
     return "\n".join(texts)
+
+
+def _training_messages_after_case_spec(messages: list[Message]) -> list[Message]:
+    """Return commit messages after CaseSpec, ensuring an oracle summary exists."""
+    trailing = list(messages[1:])
+    if trailing and _message_text(trailing[0]).strip().startswith(_TRAINING_ORACLE_SUMMARY_HEADER):
+        return trailing
+    payload = _training_case_spec_payload_from_message(messages[0]) if messages else None
+    if payload is None:
+        return trailing
+    return [_oracle_summary_message_from_case_payload(payload)] + trailing
+
+
+def _oracle_summary_message_from_case_payload(payload: dict[str, Any]) -> Message:
+    raw_case = payload.get("case") if isinstance(payload.get("case"), dict) else {}
+    raw_input = raw_case.get("input") if isinstance(raw_case.get("input"), dict) else {}
+    oracle = _parse_ground_truth_oracle(str(raw_input.get("ground_truth") or ""))
+    expected_names = [action["name"] for action in oracle["actions"] if action.get("name")]
+    expected_write_names = [
+        name for name in expected_names if _is_state_changing_action_name(name)
+    ]
+    summary = {
+        "protocol": "openviking.batch_train.oracle_summary.v1",
+        "case": {
+            "name": str(raw_case.get("name") or ""),
+            "task_signature": str(raw_case.get("task_signature") or ""),
+        },
+        "expected": {
+            "actions": oracle["actions"],
+            "action_names": expected_names,
+            "state_changing_action_names": expected_write_names,
+            "communicate_info": oracle["communicate_info"],
+            "nl_assertions": oracle["nl_assertions"],
+        },
+        "training_guidance": [
+            "Ground-truth expected actions are the oracle for this training example.",
+            "Do not learn an experience that forbids, refuses, transfers instead of, or finishes before a required state-changing action.",
+        ],
+    }
+    text = (
+        f"{_TRAINING_ORACLE_SUMMARY_HEADER}\n\n"
+        "Deterministic training-only summary derived from CaseSpec. "
+        "Preserve required actions and communication when extracting memories.\n\n"
+        f"```json\n{json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)}\n```"
+    )
+    return Message(
+        id="openviking-training-oracle-summary",
+        role="user",
+        parts=[TextPart(text=text)],
+    )
 
 
 def _parse_training_case_spec_payload(text: str) -> dict[str, Any]:
@@ -1344,4 +1422,213 @@ def _trajectory_content_from_rollout(rollout: Rollout) -> str:
             "- Conversation Evidence:",
             conversation,
         ]
+    )
+
+
+def _filter_oracle_conflicting_experience_gradients(
+    *,
+    gradients: list[Any],
+    messages: list[Message],
+) -> list[Any]:
+    """Drop experience gradients that conflict with CaseSpec-required writes.
+
+    The guard is intentionally generic: it reads the training oracle summary or
+    CaseSpec, finds required state-changing tool names, and blocks broad
+    refusal/transfer/skip guidance that mentions those tools or the current
+    task family.  This prevents one failed rollout from teaching the agent to
+    avoid actions that the evaluator explicitly requires.
+    """
+    required_writes = set(_required_write_action_names_from_messages(messages))
+    if not required_writes:
+        return list(gradients)
+    kept: list[Any] = []
+    for gradient in gradients:
+        content = _gradient_after_content(gradient)
+        if _experience_content_conflicts_with_required_writes(content, required_writes):
+            metadata = dict(getattr(gradient, "metadata", {}) or {})
+            metadata["oracle_conflict_filtered"] = True
+            try:
+                gradient.metadata = metadata
+            except Exception:
+                pass
+            logger.info(
+                "Filtered oracle-conflicting experience gradient target=%s required_writes=%s",
+                getattr(gradient, "target_name", "<unknown>"),
+                sorted(required_writes),
+            )
+            continue
+        kept.append(gradient)
+    return kept
+
+
+def _required_write_action_names_from_messages(messages: list[Message]) -> list[str]:
+    for message in messages:
+        text = _message_text(message).strip()
+        if not text.startswith(_TRAINING_ORACLE_SUMMARY_HEADER):
+            continue
+        payload = _json_payload_from_fenced_text(text)
+        expected = payload.get("expected") if isinstance(payload, dict) else None
+        if isinstance(expected, dict):
+            names = expected.get("state_changing_action_names")
+            if isinstance(names, list):
+                return [str(name) for name in names if str(name).strip()]
+
+    for message in messages:
+        text = _message_text(message).strip()
+        if not text.startswith(_TRAINING_CASE_SPEC_HEADER):
+            continue
+        payload = _parse_training_case_spec_payload(text)
+        raw_case = payload.get("case") if isinstance(payload.get("case"), dict) else {}
+        raw_input = raw_case.get("input") if isinstance(raw_case.get("input"), dict) else {}
+        oracle = _parse_ground_truth_oracle(str(raw_input.get("ground_truth") or ""))
+        return [
+            action["name"]
+            for action in oracle["actions"]
+            if action.get("name") and _is_state_changing_action_name(action["name"])
+        ]
+    return []
+
+
+def _json_payload_from_fenced_text(text: str) -> dict[str, Any]:
+    match = _JSON_FENCE_RE.search(text)
+    raw_payload = match.group(1).strip() if match else text
+    try:
+        value = JsonUtils.loads(raw_payload)
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _gradient_after_content(gradient: Any) -> str:
+    after_file = getattr(gradient, "after_file", None)
+    return str(getattr(after_file, "content", "") or "")
+
+
+def _experience_content_conflicts_with_required_writes(
+    content: str,
+    required_writes: set[str],
+) -> bool:
+    lowered = str(content or "").lower()
+    if not lowered.strip():
+        return False
+    has_conflict_term = any(term in lowered for term in _EXPERIENCE_CONFLICT_TERMS)
+    if not has_conflict_term:
+        return False
+    if "done" in lowered and any(term in lowered for term in ("before", "先", "提前")):
+        has_conflict_term = True
+    mentioned_required = any(name.lower() in lowered for name in required_writes)
+    mentions_terminal_replacement = any(
+        term in lowered
+        for term in (
+            "transfer_to_human_agents",
+            "转人工",
+            "human agent",
+            "done",
+            "拒绝",
+            "refuse",
+            "deny",
+        )
+    )
+    return mentioned_required or mentions_terminal_replacement
+
+
+def _parse_ground_truth_oracle(text: str) -> dict[str, Any]:
+    actions: list[dict[str, Any]] = []
+    communicate_info: list[str] = []
+    nl_assertions: list[str] = []
+    current: dict[str, Any] | None = None
+    mode: str | None = None
+    arg_lines: list[str] = []
+
+    def finish_current() -> None:
+        nonlocal current, arg_lines
+        if current is None:
+            return
+        raw_arguments = "\n".join(arg_lines).strip()
+        if raw_arguments:
+            current["arguments"] = _loads_json_object_or_raw(raw_arguments)
+        actions.append(current)
+        current = None
+        arg_lines = []
+
+    for raw_line in str(text or "").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            if mode == "arguments" and current is not None:
+                arg_lines.append(raw_line)
+            continue
+        if stripped.startswith("Action ID:"):
+            finish_current()
+            current = {"action_id": stripped.split(":", 1)[1].strip()}
+            mode = "action"
+            continue
+        if stripped.startswith("Communicate Info:"):
+            finish_current()
+            mode = "communicate"
+            trailing = stripped.split(":", 1)[1].strip()
+            if trailing:
+                communicate_info.append(trailing)
+            continue
+        if stripped.startswith("NL Assertions:"):
+            finish_current()
+            mode = "nl_assertions"
+            trailing = stripped.split(":", 1)[1].strip()
+            if trailing:
+                nl_assertions.append(trailing)
+            continue
+        if current is not None:
+            if stripped.startswith("Requestor:"):
+                current["requestor"] = stripped.split(":", 1)[1].strip()
+                mode = "action"
+                continue
+            if stripped.startswith("Name:"):
+                current["name"] = stripped.split(":", 1)[1].strip()
+                mode = "action"
+                continue
+            if stripped.startswith("Arguments:"):
+                mode = "arguments"
+                trailing = stripped.split(":", 1)[1].strip()
+                if trailing:
+                    arg_lines.append(trailing)
+                continue
+            if mode == "arguments":
+                arg_lines.append(raw_line)
+                continue
+        if mode == "communicate":
+            communicate_info.append(stripped)
+        elif mode == "nl_assertions":
+            nl_assertions.append(stripped)
+    finish_current()
+    return {
+        "actions": actions,
+        "communicate_info": communicate_info,
+        "nl_assertions": nl_assertions,
+    }
+
+
+def _loads_json_object_or_raw(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except Exception:
+        return raw
+
+
+def _is_state_changing_action_name(name: str) -> bool:
+    lowered = str(name or "").lower()
+    return lowered.startswith(
+        (
+            "book_",
+            "cancel_",
+            "create_",
+            "delete_",
+            "modify_",
+            "pay_",
+            "purchase_",
+            "refund_",
+            "remove_",
+            "send_",
+            "submit_",
+            "transfer_",
+            "update_",
+        )
     )
