@@ -3,7 +3,7 @@
 这个插件新增了一个面向 OpenCode 的统一 OpenViking 插件：
 
 - 外部仓库语义检索
-- 长期记忆、session 同步、生命周期边界 commit、自动 recall
+- 长期记忆、session 同步、生命周期边界 commit、自动 recall、按项目隔离 peer
 
 这是仓库中唯一继续维护的 OpenCode 插件示例。这个插件不再安装 `skills/openviking/SKILL.md`，也不要求 agent 使用 `ov` 命令。原 skill 风格的能力会通过 OpenCode tools 暴露。
 
@@ -96,6 +96,7 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
   "account": "",
   "user": "",
   "peerId": "",
+  "projectPeerIsolation": true,
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
@@ -121,6 +122,8 @@ export OPENVIKING_API_KEY="your-api-key-here"
 user/admin API key 的 API_KEY mode 时应留空。
 `peerId` 会作为 `X-OpenViking-Actor-Peer` 用于数据面的 memory/resource 请求；捕获 session message 时仍写入 body `peer_id`。需要 peer 维度路由时请显式配置。
 
+`projectPeerIsolation` 默认开启。插件会用配置中的基础 `peerId`（为空时使用 `opencode`）和当前 OpenCode 项目目录派生实际 peer id，避免不同项目的 memories 写入和召回到同一个 peer 命名空间。若需要沿用完全相同的 peer id，可设为 `"projectPeerIsolation": false`；若只想当前进程强制使用一个精确 peer id，可设置 `OPENVIKING_PEER_ID_OVERRIDE`。
+
 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、
 `OPENVIKING_PEER_ID`
 优先级高于 `openviking-config.json` 里的同名配置。
@@ -135,7 +138,7 @@ user/admin API key 的 API_KEY mode 时应留空。
 
 - `memsearch`、`memread`、`membrowse`
 - `memgrep`、`memglob`
-- `memadd`、`memremove`、`memqueue`
+- `memadd`、`memwrite`、`memremove`、`memqueue`
 - `memcommit`
 
 如果行为异常，先查看运行时文件：
@@ -162,6 +165,7 @@ curl http://localhost:1933/health
 - `memgrep`：精确文本或模式搜索，替代原 `ov grep`
 - `memglob`：文件 glob 枚举，替代原 `ov glob`
 - `memadd`：添加远端 URL 或本地文件资源，替代常见 `ov add-resource` 场景
+- `memwrite`：通过 `/api/v1/content/write` 直接写入 `viking://` 文本文件
 - `memremove`：删除资源，替代 `ov rm`
 - `memqueue`：查看处理队列，替代 `ov observer queue`
 
@@ -172,7 +176,9 @@ curl http://localhost:1933/health
 - 枚举文件用 `memglob`
 - 读取内容用 `memread`
 - 探索目录结构用 `membrowse`
+- 持久化笔记或小型文本更新用 `memwrite`；默认是 `create`，避免误覆盖
 - 删除前必须先获得用户明确确认，再调用 `memremove` 且传入 `confirm: true`
+- 如果 agent 误用 OpenCode 本地 `read`、`glob`、`grep` 工具访问 `viking://` URI，插件会阻止这次本地文件系统调用，并提示改用 `memread`、`membrowse` 或 `memsearch`。
 
 ## `memadd` 本地文件
 

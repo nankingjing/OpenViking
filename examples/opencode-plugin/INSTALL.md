@@ -3,7 +3,8 @@
 This plugin adds one unified OpenViking plugin for OpenCode:
 
 - Semantic retrieval for external repositories
-- Long-term memory, session synchronization, lifecycle commit, and automatic recall
+- Long-term memory, session synchronization, lifecycle commit, automatic recall,
+  and per-project peer isolation
 
 This is the only OpenCode plugin example maintained in this repository. It does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The former skill-style capabilities are exposed as OpenCode tools here.
 
@@ -96,6 +97,7 @@ Example configuration:
   "account": "",
   "user": "",
   "peerId": "",
+  "projectPeerIsolation": true,
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
@@ -116,7 +118,9 @@ It is recommended to provide the API key through an environment variable instead
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-`apiKey` is sent as `X-API-Key`. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty when using API-key mode with user/admin API keys. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`. Configure it explicitly when peer-scoped memory routing is needed.
+`apiKey` is sent as `X-API-Key`. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty when using API-key mode with user/admin API keys. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`.
+
+`projectPeerIsolation` defaults to `true`. The plugin derives the effective peer id from the configured base `peerId` (or `opencode` when empty) plus the current OpenCode project directory. This avoids memory cross-talk between unrelated projects. Set `"projectPeerIsolation": false` to use the exact configured `peerId`; set `OPENVIKING_PEER_ID_OVERRIDE` to force one exact peer id for the current process.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `openviking-config.json`.
 
@@ -130,7 +134,7 @@ In a new OpenCode session, ask the agent to browse OpenViking memory or search f
 
 - `memsearch`, `memread`, `membrowse`
 - `memgrep`, `memglob`
-- `memadd`, `memremove`, `memqueue`
+- `memadd`, `memwrite`, `memremove`, `memqueue`
 - `memcommit`
 
 If anything looks wrong, check the runtime files:
@@ -157,6 +161,7 @@ The plugin exposes the following tools through the OpenCode `tool` hook:
 - `memgrep`: exact text or pattern search, replacing the former `ov grep` use case
 - `memglob`: file glob enumeration, replacing the former `ov glob` use case
 - `memadd`: add a remote URL or local file resource, replacing common `ov add-resource` scenarios
+- `memwrite`: write text to a `viking://` file through `/api/v1/content/write`
 - `memremove`: remove resources, replacing `ov rm`
 - `memqueue`: inspect the processing queue, replacing `ov observer queue`
 
@@ -167,7 +172,9 @@ Usage guidance:
 - Use `memglob` to enumerate files.
 - Use `memread` to read content.
 - Use `membrowse` to explore directory structure.
+- Use `memwrite` for durable notes or small direct text updates; default mode is `create`.
 - Before deleting anything, obtain explicit user confirmation first; then call `memremove` with `confirm: true`.
+- If an agent tries to use OpenCode's local `read`, `glob`, or `grep` tools on a `viking://` URI, the plugin blocks that call and points it to `memread`, `membrowse`, or `memsearch`.
 
 ## Local Files with `memadd`
 
