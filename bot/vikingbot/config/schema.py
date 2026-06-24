@@ -433,12 +433,6 @@ class AgentsConfig(BaseModel):
     """Agent configuration."""
 
     model: str = "openai/doubao-seed-2-0-pro-260215"
-    temperature: float = Field(
-        default=0.7,
-        ge=0.0,
-        le=2.0,
-        description="Sampling temperature for LLM requests.",
-    )
     max_tool_iterations: int = 50
     memory_window: int = 50
     session_context_enabled: bool = False

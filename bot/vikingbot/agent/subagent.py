@@ -33,7 +33,6 @@ class SubagentManager:
         bus: MessageBus,
         config: "Config",
         model: str | None = None,
-        temperature: float = 0.7,
         sandbox_manager: "SandboxManager | None" = None,
     ):
         from vikingbot.config.schema import ExecToolConfig
@@ -43,7 +42,6 @@ class SubagentManager:
         self.bus = bus
         self.config = config
         self.model = model or provider.get_default_model()
-        self.temperature = temperature
         self.sandbox_manager = sandbox_manager
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -131,7 +129,6 @@ class SubagentManager:
                     messages=messages,
                     tools=tools.get_definitions(),
                     model=self.model,
-                    temperature=self.temperature,
                 )
 
                 if response.has_tool_calls:
