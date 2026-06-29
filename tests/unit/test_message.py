@@ -6,6 +6,8 @@
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from openviking.message import ContextPart, Message, TextPart, ToolPart
 from openviking.message.part import part_from_dict
 
@@ -276,6 +278,44 @@ class TestPartFromDict:
 
         assert isinstance(part, TextPart)
         assert part.text == "Hello"
+
+    def test_text_part_from_dict_ignores_extra_fields(self):
+        """Test legacy text parts with extra fields remain accepted."""
+        data = {"text": "Hello", "ignored": ["extra"]}
+
+        part = part_from_dict(data)
+
+        assert isinstance(part, TextPart)
+        assert part.text == "Hello"
+
+    def test_text_part_from_dict_rejects_non_string_text(self):
+        """Test malformed text fields fail before corrupting message state."""
+        with pytest.raises(ValueError, match=r"text part field 'text' must be a string"):
+            part_from_dict({"type": "text", "text": ["bad"]})
+
+    def test_context_part_from_dict_rejects_non_string_uri(self):
+        """Test malformed context URIs fail before corrupting message state."""
+        with pytest.raises(ValueError, match=r"context part field 'uri' must be a string"):
+            part_from_dict({"type": "context", "uri": ["bad"]})
+
+    def test_context_part_from_dict_rejects_non_string_abstract(self):
+        """Test malformed context abstracts fail before corrupting message state."""
+        with pytest.raises(ValueError, match=r"context part field 'abstract' must be a string"):
+            part_from_dict({"type": "context", "abstract": ["bad"]})
+
+    def test_tool_part_from_dict_joins_string_list_output(self):
+        """Test text block tool outputs are normalized into plain text."""
+        part = part_from_dict({"type": "tool", "tool_output": ["first", "second"]})
+
+        assert isinstance(part, ToolPart)
+        assert part.tool_output == "first\nsecond"
+
+    def test_tool_part_from_dict_json_serializes_structured_output(self):
+        """Test structured tool outputs are normalized into JSON text."""
+        part = part_from_dict({"type": "tool", "tool_output": {"ok": True, "items": ["中文"]}})
+
+        assert isinstance(part, ToolPart)
+        assert part.tool_output == '{"ok": true, "items": ["中文"]}'
 
     def test_empty_dict(self):
         """Test empty dict creates empty TextPart."""

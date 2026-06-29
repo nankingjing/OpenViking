@@ -5,8 +5,9 @@
 Message consists of multiple Parts, each Part has different type and purpose.
 """
 
+import json
 from dataclasses import dataclass
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 
 @dataclass
@@ -68,6 +69,22 @@ class ToolPart:
 Part = Union[TextPart, ContextPart, ToolPart]
 
 
+def _require_str(value: Any, *, part_type: str, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{part_type} part field '{field}' must be a string")
+    return value
+
+
+def _stringify_tool_output(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return "\n".join(value)
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def part_from_dict(data: dict) -> Part:
     """Convert a dict to a Part object.
 
@@ -79,22 +96,28 @@ def part_from_dict(data: dict) -> Part:
     """
     part_type = data.get("type", "text")
     if part_type == "text":
-        return TextPart(text=data.get("text", ""))
+        return TextPart(text=_require_str(data.get("text", ""), part_type="text", field="text"))
     elif part_type == "context":
         return ContextPart(
-            uri=data.get("uri", ""),
+            uri=_require_str(data.get("uri", ""), part_type="context", field="uri"),
             context_type=data.get("context_type", "memory"),
-            abstract=data.get("abstract", ""),
+            abstract=_require_str(
+                data.get("abstract", ""),
+                part_type="context",
+                field="abstract",
+            ),
         )
     elif part_type == "tool":
         return ToolPart(
-            tool_id=data.get("tool_id", ""),
-            tool_name=data.get("tool_name", ""),
-            tool_uri=data.get("tool_uri", ""),
-            skill_uri=data.get("skill_uri", ""),
+            tool_id=_require_str(data.get("tool_id", ""), part_type="tool", field="tool_id"),
+            tool_name=_require_str(data.get("tool_name", ""), part_type="tool", field="tool_name"),
+            tool_uri=_require_str(data.get("tool_uri", ""), part_type="tool", field="tool_uri"),
+            skill_uri=_require_str(data.get("skill_uri", ""), part_type="tool", field="skill_uri"),
             tool_input=data.get("tool_input"),
-            tool_output=data.get("tool_output", ""),
-            tool_status=data.get("tool_status", "pending"),
+            tool_output=_stringify_tool_output(data.get("tool_output", "")),
+            tool_status=_require_str(
+                data.get("tool_status", "pending"), part_type="tool", field="tool_status"
+            ),
             duration_ms=data.get("duration_ms"),
             prompt_tokens=data.get("prompt_tokens"),
             completion_tokens=data.get("completion_tokens"),
