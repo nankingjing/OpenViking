@@ -474,23 +474,7 @@ class CollectionAdapter(ABC):
         coll: Collection,
         output_fields: Optional[list[str]],
     ) -> Optional[list[str]]:
-        if not output_fields:
-            return output_fields
-        try:
-            meta = coll.get_meta_data() or {}
-            fields = meta.get("Fields", [])
-            if not isinstance(fields, list) or not fields:
-                return output_fields
-            allowed = {
-                item.get("FieldName")
-                for item in fields
-                if isinstance(item, dict) and item.get("FieldName")
-            }
-            if not allowed:
-                return output_fields
-            return [field for field in output_fields if field in allowed]
-        except Exception:
-            return output_fields
+        return output_fields
 
     def query(
         self,

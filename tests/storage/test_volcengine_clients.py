@@ -6,6 +6,7 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApiWithApiKey,
 )
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
+from openviking.storage.vectordb_adapters.base import CollectionAdapter
 from openviking.storage.vectordb_adapters.volcengine_adapter import VolcengineCollectionAdapter
 from openviking_cli.utils.config.vectordb_config import (
     VectorDBBackendConfig,
@@ -798,22 +799,16 @@ def test_volcengine_adapter_update_data_supports_api_key_mode():
     assert result == ["doc-1"]
 
 
-def test_volcengine_adapter_query_filters_output_fields_against_schema():
-    captured = {}
+def test_volcengine_adapter_query_filters_output_fields_against_cached_schema():
+    captured = {"meta_calls": 0}
 
     class _SearchResult:
         data = []
 
     class _Collection:
         def get_meta_data(self):
-            return {
-                "Fields": [
-                    {"FieldName": "id"},
-                    {"FieldName": "uri"},
-                    {"FieldName": "abstract"},
-                    {"FieldName": "account_id"},
-                ]
-            }
+            captured["meta_calls"] += 1
+            raise AssertionError("query should not read collection metadata")
 
         def search_by_vector(self, **kwargs):
             captured.update(kwargs)
@@ -830,6 +825,16 @@ def test_volcengine_adapter_query_filters_output_fields_against_schema():
         collection_name="context",
         index_name="default",
     )
+    adapter._cache_schema_field_names(
+        {
+            "Fields": [
+                {"FieldName": "id"},
+                {"FieldName": "uri"},
+                {"FieldName": "abstract"},
+                {"FieldName": "account_id"},
+            ]
+        }
+    )
     adapter._collection = _Collection()
 
     adapter.query(
@@ -838,6 +843,51 @@ def test_volcengine_adapter_query_filters_output_fields_against_schema():
     )
 
     assert captured["output_fields"] == ["uri", "abstract"]
+    assert captured["meta_calls"] == 0
+
+
+def test_base_adapter_query_does_not_read_collection_meta_for_output_fields():
+    captured = {"meta_calls": 0}
+
+    class _SearchResult:
+        data = []
+
+    class _Collection:
+        def get_meta_data(self):
+            captured["meta_calls"] += 1
+            return {
+                "Fields": [
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                ]
+            }
+
+        def search_by_vector(self, **kwargs):
+            captured.update(kwargs)
+            return _SearchResult()
+
+    class _Adapter(CollectionAdapter):
+        mode = "test"
+
+        @classmethod
+        def from_config(cls, config):
+            raise NotImplementedError
+
+        def _load_existing_collection_if_needed(self):
+            self._collection = _Collection()
+
+        def _create_backend_collection(self, meta):
+            raise NotImplementedError
+
+    adapter = _Adapter(collection_name="context", index_name="default")
+
+    adapter.query(
+        query_vector=[0.1, 0.2],
+        output_fields=["uri", "search_tags", "abstract"],
+    )
+
+    assert captured["output_fields"] == ["uri", "search_tags", "abstract"]
+    assert captured["meta_calls"] == 0
 
 
 def test_http_collection_update_data_posts_to_update_endpoint(monkeypatch):

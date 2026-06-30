@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
@@ -47,6 +47,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         self._api_key = api_key
         self._host = host
         self._project_name = project_name
+        self._schema_field_names: set[str] | None = None
 
     @classmethod
     def from_config(cls, config: Any):
@@ -96,6 +97,36 @@ class VolcengineCollectionAdapter(CollectionAdapter):
     def _uses_api_key_auth(self) -> bool:
         return bool(self._api_key)
 
+    @staticmethod
+    def _schema_field_names_from_meta(meta: Dict[str, Any] | None) -> set[str]:
+        if not isinstance(meta, dict):
+            return set()
+        fields = meta.get("Fields", [])
+        if not isinstance(fields, list):
+            return set()
+        return {
+            item.get("FieldName")
+            for item in fields
+            if isinstance(item, dict) and item.get("FieldName")
+        }
+
+    def _cache_schema_field_names(self, meta: Dict[str, Any] | None) -> None:
+        names = self._schema_field_names_from_meta(meta)
+        if names:
+            self._schema_field_names = names
+
+    def _filter_output_fields(
+        self,
+        coll: Collection,
+        output_fields: Optional[list[str]],
+    ) -> Optional[list[str]]:
+        if not output_fields:
+            return output_fields
+        allowed = self._schema_field_names
+        if not allowed:
+            return output_fields
+        return [field for field in output_fields if field in allowed]
+
     def _new_collection_handle(self) -> Collection:
         if self._uses_api_key_auth():
             return Collection(
@@ -126,11 +157,13 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             return
         if self._uses_api_key_auth():
             self._collection = self._new_collection_handle()
+            self._cache_schema_field_names(self._collection.get_meta_data())
             return
         candidate = self._new_collection_handle()
         meta = candidate.get_meta_data() or {}
         if meta and meta.get("CollectionName"):
             self._collection = candidate
+            self._cache_schema_field_names(meta)
 
     def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
         if self._uses_api_key_auth():
@@ -140,10 +173,12 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             )
         payload = dict(meta)
         payload.update(self._meta())
-        return get_or_create_volcengine_collection(
+        collection = get_or_create_volcengine_collection(
             config=self._config(),
             meta_data=payload,
         )
+        self._cache_schema_field_names(payload)
+        return collection
 
     def _sanitize_scalar_index_fields(
         self,
