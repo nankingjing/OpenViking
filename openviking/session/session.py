@@ -19,6 +19,7 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.service.session_auto_commit import should_enable_auto_commit
 from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.tool_result_store import (
@@ -919,7 +920,10 @@ class Session:
                 pushed_out = self._messages[-(keep + 1)]
                 self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
-        self._append_messages_to_jsonl_batch(messages)
+        self._append_messages_to_jsonl_batch(
+            messages,
+            use_session_lock=should_enable_auto_commit(self._meta.auto_commit_policy),
+        )
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
@@ -3333,20 +3337,44 @@ class Session:
             ctx=self.ctx,
         )
 
-    def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
+    def _append_messages_to_jsonl_batch(
+        self,
+        messages: List[Message],
+        *,
+        use_session_lock: bool = False,
+    ) -> None:
         """Append multiple messages to messages.jsonl in a single write."""
         if not self._viking_fs:
             return
-        run_async(self._append_messages_to_jsonl_batch_async(messages))
+        run_async(
+            self._append_messages_to_jsonl_batch_async(
+                messages,
+                use_session_lock=use_session_lock,
+            )
+        )
 
-    async def _append_messages_to_jsonl_batch_async(self, messages: List[Message]) -> None:
-        """Append messages under the same session lock used by commit live rewrites."""
+    async def _append_messages_to_jsonl_batch_async(
+        self,
+        messages: List[Message],
+        *,
+        use_session_lock: bool = False,
+    ) -> None:
+        """Append messages, optionally under the lock used by auto-commit live rewrites."""
         if not self._viking_fs:
             return
+
+        batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
+        if not use_session_lock:
+            await self._viking_fs.append_file(
+                f"{self._session_uri}/messages.jsonl",
+                batch_content,
+                ctx=self.ctx,
+            )
+            return
+
         from openviking.storage.transaction import LockContext, get_lock_manager
 
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
         async with LockContext(
             get_lock_manager(),
             [session_path],

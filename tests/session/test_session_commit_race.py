@@ -72,13 +72,15 @@ class TestCommitRace:
         assert len(session.messages) == 1
         assert session.messages[0].content == "New message during commit"
 
-    async def test_message_append_conflicts_with_commit_live_rewrite_lock_without_data_loss(
+    async def test_message_append_conflicts_with_auto_commit_live_rewrite_lock_without_data_loss(
         self, client: AsyncOpenViking
     ):
-        """Appending during a commit should fail fast instead of being overwritten."""
+        """Auto-commit sessions serialize append with live rewrite to avoid data loss."""
         ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-        session_id = "race_test_commit_append_lock"
+        session_id = "race_test_auto_commit_append_lock"
         committing = await client._client._service.sessions.create(ctx, session_id=session_id)
+        committing.meta.auto_commit_policy = {"enabled": True, "keep_recent_count": 0}
+        await committing._save_meta()
         appending = client._client._service.sessions.session(ctx, session_id)
 
         committing.add_message("user", [TextPart("Original message")])
@@ -119,3 +121,40 @@ class TestCommitRace:
         assert [message.content for message in reloaded.messages] == [
             "New message after commit rewrite"
         ]
+
+    async def test_message_append_does_not_use_commit_lock_without_auto_commit(
+        self, client: AsyncOpenViking
+    ):
+        """Normal sessions keep the old append behavior and do not take the commit lock."""
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+        session_id = "race_test_plain_append_no_lock"
+        committing = await client._client._service.sessions.create(ctx, session_id=session_id)
+        appending = client._client._service.sessions.session(ctx, session_id)
+
+        committing.add_message("user", [TextPart("Original message")])
+        await appending.load()
+
+        rewrite_started = asyncio.Event()
+        allow_rewrite = asyncio.Event()
+        original_write = committing._write_to_agfs_async
+
+        async def gated_write(messages):
+            rewrite_started.set()
+            await allow_rewrite.wait()
+            await original_write(messages)
+
+        committing._write_to_agfs_async = gated_write
+
+        commit_task = asyncio.create_task(committing.commit_async())
+        await rewrite_started.wait()
+
+        await asyncio.to_thread(
+            appending.add_message,
+            "user",
+            [TextPart("New message during plain commit rewrite")],
+        )
+
+        allow_rewrite.set()
+        result = await commit_task
+
+        assert result.get("archived") is True
