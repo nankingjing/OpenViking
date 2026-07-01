@@ -185,6 +185,11 @@ async def test_initialize_skips_session_auto_commit_scheduler_when_idle_disabled
             return 0
 
     class _FakeQueueManager:
+        EXTERNAL_PARSE = "external_parse"
+
+        def get_queue(self, *_args, **_kwargs):
+            return object()
+
         def start(self):
             return None
 
