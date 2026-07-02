@@ -1,15 +1,15 @@
-# OpenViking Memory Extension for Pi Coding Agent
+# OpenViking Context Extension for Pi Coding Agent
 
-Long-term semantic memory for [Pi](https://github.com/mariozechner/pi-coding-agent) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and sessions are committed for persistent memory extraction — all via pi's native extension API.
+Long-term semantic memory **and context takeover** for [Pi](https://pi.dev) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every run, and — with takeover enabled (default) — OpenViking becomes the authoritative long-term context store: committed history is replaced in the LLM's view by OV's archive overview through pi's `context` hook, vikingbot-style. Pi's own LLM summarizer never owns your history.
 
-> Design informed by lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach. See [DESIGN.md](./DESIGN.md) for the full design spec with comparison tables and event flow diagrams.
+> Design informed by lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach. See [DESIGN.md](./DESIGN.md) for the base design spec and [TAKEOVER.md](./TAKEOVER.md) for the context-takeover layer.
 
 ## Quick Start
 
 ### Prerequisites
 
-- **Pi coding agent** installed (`npm i -g @mariozechner/pi-coding-agent`)
-- **Node.js 18+** (for the extension's TypeScript runtime)
+- **Pi coding agent** 0.80+ installed (`npm i -g @earendil-works/pi-coding-agent`)
+- **Node.js 20+** (for the extension's TypeScript runtime)
 - **An OpenViking server** reachable — local or remote
 
 ### 1. Have an OpenViking server reachable
@@ -124,6 +124,25 @@ All fields below live in `config.json`. Defaults are shown.
 | `bypassPatterns`         | `[]`       | Glob patterns to skip extension processing                               |
 | `logLevel`               | `"error"`  | `"silent"`, `"error"`, or `"info"`                                      |
 
+### Context takeover (see [TAKEOVER.md](./TAKEOVER.md))
+
+Configured as a nested `"takeover"` block in `config.json`:
+
+| Field                      | Default    | Description                                                              |
+|----------------------------|------------|--------------------------------------------------------------------------|
+| `takeover.enabled`         | `true`     | OV owns long-term context via the `context` hook                         |
+| `takeover.tokenThreshold`  | `30000`    | Synced-token pressure that triggers an OV commit + boundary advance      |
+| `takeover.keepRecentTurns` | `3`        | Recent user turns kept live (full fidelity) past the boundary            |
+| `takeover.overviewBudget`  | `3000`     | Token budget for the injected archive overview                           |
+| `takeover.overviewPollMs`  | `2000`     | Poll interval while waiting for OV's post-commit overview                |
+| `takeover.overviewPollMax` | `15`       | Max polls before keeping the previous overview                           |
+
+When takeover is on, capture switches to **faithful mode** (every turn is
+synced; `captureMode` is ignored) because the archive overview becomes part of
+the model's effective history. The internal `commitTokenThreshold` commit is
+disabled — the takeover layer owns commits. Set `OV_DEBUG_LOG=/path/to/file`
+to trace boundary/commit decisions.
+
 ## Architecture
 
 ```
@@ -151,12 +170,16 @@ The extension is a single directory of TypeScript files loaded by pi's `jiti` tr
 
 | Pi Event               | Extension Action                                                                 |
 |------------------------|----------------------------------------------------------------------------------|
-| `session_start`        | Health check → create/find OV session → build profile block → build memory index → register tools |
-| `before_agent_start`   | Fallback tool registration (for `pi -c` resume) + inject archive overview        |
-| `context`              | Search OV with current prompt → inject `<relevant-memories>` block               |
-| `turn_end`             | Extract user + assistant turns → queue writes to OV session                      |
-| `session_before_compact`| Commit pending messages before pi rewrites the transcript                        |
-| `session_shutdown`     | Final commit so the last window is archived                                      |
+| `session_start`        | Idempotent `start()`: health check → ensure OV session → profile block → restore takeover state → memory index → register tools |
+| `before_agent_start`   | Same `start()` fallback (`pi -c` continuations skip session_start) + synchronous recall + system-prompt additions |
+| `context`              | **Takeover**: drop committed history, inject `[OpenViking Session Context]` overview → then inject `<relevant-memories>` into the current prompt |
+| `agent_end`            | Capture the run (user prompt + assistant rounds + tool inputs) → queue writes → threshold accounting → OV commit + boundary advance |
+| `session_before_compact`| Takeover mode: commit to OV and supply OV's overview as pi's compaction summary (fail-open). Non-takeover: commit, cache overview |
+| `session_shutdown`     | Final commit + persist takeover state                                            |
+
+> Why `agent_end`, not `turn_end`: pi's `turnIndex` counts LLM rounds *within*
+> one run and resets per prompt — a turn-based dedup counter silently skips
+> the first round of every run (everything, in one-shot `pi -p` usage).
 
 ### Recall: Synchronous, Not Stale
 
@@ -226,15 +249,43 @@ pi-coding-agent-extension/
 ├── config.json          # Default configuration (edit to customize)
 ├── config.ts            # Config loader (defaults + config.json merge)
 ├── client.ts            # OpenViking HTTP client (fetch + response envelope)
-├── sync.ts              # Turn capture, write queue, session lifecycle
+├── sync.ts              # Run capture, write queue, session lifecycle
 ├── recall.ts            # Synchronous recall with ranking + budget
+├── takeover.ts          # Context takeover (boundary, overview injection, commits)
 ├── tools.ts             # 7 registered LLM tools + /viking command
 ├── index-builder.ts     # Memory index builder (knowledge map)
 ├── index.ts             # Extension entry point (event handlers)
+├── tests/               # Vitest unit suites (mocked OV — no network)
+├── scripts/
+│   ├── e2e-live.sh      # Live acceptance test: real pi + real OV + real LLM
+│   ├── e2e-live.mjs
+│   └── e2e-probe.ts     # Probe extension recording provider payloads
+├── TAKEOVER.md          # Context-takeover design
 └── README.md
 ```
 
-All TypeScript files are loaded directly by pi's built-in `jiti` transpiler — zero dependencies beyond Node.js.
+At runtime the TypeScript files are loaded directly by pi's built-in `jiti`
+transpiler — zero runtime dependencies beyond Node.js. `package.json` exists
+for development only (types, vitest, tsc).
+
+## Development & Testing
+
+```bash
+npm install          # dev deps: pi types, vitest, typescript
+npm run typecheck    # tsc --noEmit (strict)
+npm test             # vitest — 144 unit tests against a mocked OV server
+
+# Live acceptance test (drives real pi + OV + LLM; creates and deletes a
+# throwaway OV session):
+OPENVIKING_URL=https://your-ov OPENVIKING_API_KEY=... \
+SUPER_RELAY_API_KEY=... npm run e2e
+```
+
+The e2e drives three `pi -p`/`-c` turns with a tiny takeover threshold and
+asserts — from the *actual provider request payloads* — that committed turns
+are replaced by the `[OpenViking Session Context]` overview, the boundary
+survives process restarts, the OV session gains an archive, and the model can
+still answer a fact that only exists in the overview.
 
 ## Troubleshooting
 

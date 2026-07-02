@@ -126,13 +126,14 @@ export class WriteQueue {
     this.flushing = true;
 
     const batch = this.queue.splice(0);
-    for (const turn of batch) {
+    for (let i = 0; i < batch.length; i++) {
+      const turn = batch[i];
       const ok = await this.client.addMessage(
         this.sessionId, turn.role, turn.content,
       );
       if (!ok) {
-        // Re-queue failed turns at the front for retry
-        this.queue.unshift(turn);
+        // Re-queue failed turn + remaining unprocessed turns at front for retry
+        this.queue.unshift(...batch.slice(i));
         break;
       }
     }
@@ -181,27 +182,45 @@ export class SyncManager {
     return true;
   }
 
+  /**
+   * Sync one turn to OV. Returns the estimated token count of what was
+   * synced (0 when the turn was filtered out) so the takeover layer can do
+   * commit-threshold accounting.
+   *
+   * Faithful mode (takeover enabled): the archive overview becomes part of
+   * the model's effective history, so every turn must be captured — only
+   * empty content and slash-commands are skipped, `captureMode` is ignored.
+   */
   async syncTurn(
     userText: string, assistantText: string, toolLines: string[],
     turnIndex: number,
-  ): Promise<void> {
-    if (!this.ovSessionId || !this.writeQueue) return;
+  ): Promise<number> {
+    if (!this.ovSessionId || !this.writeQueue) return 0;
 
     // Dedup guard
-    if (turnIndex <= this.syncedTurnCount) return;
+    if (turnIndex <= this.syncedTurnCount) return 0;
 
     // Capture filter on user text
-    const filterResult = shouldCapture(userText, this.config.captureMode);
-    if (!filterResult.capture) {
-      this.syncedTurnCount = turnIndex;
-      return;
+    const faithful = this.config.takeoverEnabled;
+    if (faithful) {
+      const t = userText.trim();
+      if (!t || /^\/[a-z0-9_-]{1,64}\b/i.test(t)) {
+        this.syncedTurnCount = turnIndex;
+        return 0;
+      }
+    } else {
+      const filterResult = shouldCapture(userText, this.config.captureMode);
+      if (!filterResult.capture) {
+        this.syncedTurnCount = turnIndex;
+        return 0;
+      }
     }
 
     // Strip injected blocks
     const cleanUser = stripInjectedBlocks(userText);
     if (!cleanUser) {
       this.syncedTurnCount = turnIndex;
-      return;
+      return 0;
     }
 
     // Enqueue user message
@@ -220,22 +239,30 @@ export class SyncManager {
 
     // Track tokens
     const totalText = cleanUser + assistantText + toolLines.join("");
-    this.pendingTokens += estimateTokens(totalText);
+    const turnTokens = estimateTokens(totalText);
+    this.pendingTokens += turnTokens;
     this.syncedTurnCount = turnIndex;
 
-    // Check commit threshold
-    if (this.config.commitTokenThreshold > 0 &&
+    // Check commit threshold (takeover mode owns commits instead)
+    if (!this.config.takeoverEnabled &&
+        this.config.commitTokenThreshold > 0 &&
         this.pendingTokens >= this.config.commitTokenThreshold) {
       await this.writeQueue.flush();
       await this.commit(false);
     }
+    return turnTokens;
   }
 
-  async commit(wait: boolean = false): Promise<string | null> {
+  /** Flush queued turns without cancelling the flush timer (mid-session commits). */
+  async flushQueue(): Promise<void> {
+    await this.writeQueue?.flush();
+  }
+
+  async commit(_wait: boolean = false): Promise<string | null> {
     if (!this.ovSessionId) return null;
-    const result = await this.client.commitSession(this.ovSessionId, wait);
+    const result = await this.client.commitSession(this.ovSessionId);
     if (result) this.pendingTokens = 0;
-    return result;
+    return result?.archive_uri ?? null;
   }
 
   async shutdown(): Promise<void> {

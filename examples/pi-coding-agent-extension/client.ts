@@ -106,7 +106,7 @@ export class OVClient {
         signal: controller.signal,
       });
       clearTimeout(timer);
-      const body = await resp.json().catch(() => ({}));
+      const body = (await resp.json().catch(() => ({}))) as any;
       if (!resp.ok || body.status === "error") {
         return { ok: false, result: null, error: body.error || { message: `HTTP ${resp.status}` } };
       }
@@ -126,13 +126,15 @@ export class OVClient {
 
   // ========== Sessions ==========
 
-  /** POST /api/v1/sessions — create or reuse session */
+  /** POST /api/v1/sessions — create or reuse session. ALREADY_EXISTS counts
+   * as success: every `pi -c`/resume run re-ensures the same OV session. */
   async createSession(sessionId: string): Promise<boolean> {
     const res = await this.fetchJSON<any>("/api/v1/sessions", {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId }),
     });
-    return res.ok;
+    if (res.ok) return true;
+    return res.error?.code === "ALREADY_EXISTS";
   }
 
   /** GET /api/v1/sessions/{id} — session metadata */

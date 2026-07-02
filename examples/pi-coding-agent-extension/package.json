@@ -1,0 +1,24 @@
+{
+  "name": "@openviking/pi-extension",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenViking context-takeover extension for the pi coding agent (pi.dev)",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "bash scripts/e2e-live.sh"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.80.3",
+    "@earendil-works/pi-coding-agent": "0.80.3",
+    "@types/node": "^22.10.0",
+    "typebox": "1.1.38",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

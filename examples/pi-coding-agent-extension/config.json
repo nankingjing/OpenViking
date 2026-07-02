@@ -25,5 +25,13 @@
   "writeQueueFlushInterval": 5000,
   "writeQueueFlushThreshold": 5,
   "bypassPatterns": [],
-  "logLevel": "error"
+  "logLevel": "error",
+  "takeover": {
+    "enabled": true,
+    "tokenThreshold": 30000,
+    "keepRecentTurns": 3,
+    "overviewBudget": 3000,
+    "overviewPollMs": 2000,
+    "overviewPollMax": 15
+  }
 }

@@ -9,7 +9,7 @@
  * Design informed by: OpenClaw (synchronous recall), Claude Code plugin
  * (most mature, production-hardened), Hermes (anti-pattern: stale prefetch).
  */
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { dirname } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import { loadConfig, type OVConfig } from "./config.js";
@@ -18,6 +18,8 @@ import { RecallManager } from "./recall.js";
 import { SyncManager, estimateTokens } from "./sync.js";
 import { IndexBuilder } from "./index-builder.js";
 import { registerTools } from "./tools.js";
+import { TakeoverManager } from "./takeover.js";
+import { appendFileSync } from "node:fs";
 
 export default async function (pi: ExtensionAPI) {
   // --- Load config ---
@@ -36,6 +38,19 @@ export default async function (pi: ExtensionAPI) {
   const recall = new RecallManager(client, config);
   const sync = new SyncManager(client, config);
   const indexBuilder = new IndexBuilder(client, config);
+  const debugLog = (msg: string) => {
+    // Opt-in file logger (TUI-safe): OV_DEBUG_LOG=/path/to/file
+    const path = process.env.OV_DEBUG_LOG;
+    if (!path) return;
+    try { appendFileSync(path, `${new Date().toISOString()} ${msg}\n`); } catch { /* best effort */ }
+  };
+  const takeover = new TakeoverManager({
+    client,
+    sync,
+    config,
+    appendEntry: (customType, data) => pi.appendEntry(customType, data),
+    log: debugLog,
+  });
 
   // Session state
   let connected = false;
@@ -48,8 +63,14 @@ export default async function (pi: ExtensionAPI) {
   // Event Handlers
   // ================================================================
 
-  // --- session_start ---
-  pi.on("session_start", async (event, ctx) => {
+  // Idempotent startup: session_start doesn't fire for `pi -c` continuations,
+  // so both session_start and before_agent_start funnel through here.
+  let started = false;
+  const start = async (ctx: { ui: { notify: (msg: string, level: any) => void }; sessionManager: { getSessionId(): string; getBranch(): unknown[] } }) => {
+    if (started) return;
+    started = true;
+    debugLog(`start: begin (session ${ctx.sessionManager.getSessionId()}, entries ${ctx.sessionManager.getBranch().length})`);
+
     // Bypass check
     const cwd = process.cwd();
     for (const pattern of config.bypassPatterns) {
@@ -61,6 +82,7 @@ export default async function (pi: ExtensionAPI) {
 
     // Health check
     connected = await client.health();
+    debugLog(`start: health connected=${connected}`);
     if (!connected) {
       if (config.logLevel === "info") {
         ctx.ui.notify("OpenViking: server not reachable", "warning");
@@ -72,6 +94,7 @@ export default async function (pi: ExtensionAPI) {
     const piSessionId = ctx.sessionManager.getSessionId();
     const ok = await sync.ensureSession(piSessionId);
     if (!ok) {
+      connected = false;
       if (config.logLevel !== "silent") {
         ctx.ui.notify("OpenViking: failed to create session", "error");
       }
@@ -81,30 +104,39 @@ export default async function (pi: ExtensionAPI) {
     // Profile injection
     profileBlock = await buildProfileBlock(client, config);
 
-    // Resume rehydration — fetch archive overview if session was previously committed
-    if (sync.sessionId) {
+    // Takeover: restore boundary/overview persisted in session entries.
+    // The context hook then re-injects the overview inline, so the
+    // system-prompt rehydration below is only for non-takeover mode.
+    if (config.takeoverEnabled) {
+      takeover.restore(ctx.sessionManager.getBranch() as any);
+    } else if (sync.sessionId) {
+      // Resume rehydration — fetch archive overview if session was previously committed
       archiveOverview = await fetchArchiveOverview(client, sync.sessionId, config);
     }
 
     // Build memory index
     await indexBuilder.buildIndex();
 
-    // Register tools (also re-registered in before_agent_start for pi -c continuations)
-    registerTools(pi, client, sync);
-    toolsRegistered = true;
-
-    if (config.logLevel === "info") {
-      ctx.ui.notify(`OpenViking connected (${piSessionId.slice(0, 8)}...)`, "info");
-    }
-  });
-
-  // --- before_agent_start ---
-  pi.on("before_agent_start", async (event, _ctx) => {
-    // Re-register tools on resume — session_start doesn't fire for pi -c continuations
+    // Register tools
     if (!toolsRegistered) {
       registerTools(pi, client, sync);
       toolsRegistered = true;
     }
+
+    if (config.logLevel === "info") {
+      ctx.ui.notify(`OpenViking connected (${piSessionId.slice(0, 8)}...)`, "info");
+    }
+  };
+
+  // --- session_start ---
+  pi.on("session_start", async (_event, ctx) => {
+    await start(ctx);
+  });
+
+  // --- before_agent_start ---
+  pi.on("before_agent_start", async (event, ctx) => {
+    // session_start doesn't fire for pi -c continuations — start here instead
+    await start(ctx);
 
     if (!connected || bypassed) return;
 
@@ -128,27 +160,37 @@ export default async function (pi: ExtensionAPI) {
   });
 
   // --- context ---
+  // Order matters: takeover first (replace committed history with the OV
+  // archive overview), then recall injection into the (kept) last user message.
   pi.on("context", async (event, _ctx) => {
     if (!connected || bypassed) return;
-    const messages = recall.injectRecall(event.messages);
+    const afterTakeover = takeover.transformContext(event.messages as any) as any[];
+    const messages = recall.injectRecall(afterTakeover);
     return { messages };
   });
 
-  // --- turn_end ---
-  pi.on("turn_end", async (event, ctx) => {
+  // --- agent_end: capture the whole run ---
+  // NOTE: capture happens on agent_end, not turn_end. Pi's turnIndex counts
+  // LLM rounds *within* one agent run and resets to 0 on every prompt, so a
+  // turn_end-based dedup counter (`turnIndex <= synced`) silently skipped the
+  // first round of every run — in one-shot `pi -p` usage nothing was ever
+  // synced. agent_end fires once per user prompt with exactly this run's new
+  // messages (user prompt + assistant rounds + tool results).
+  let runCounter = 0;
+  pi.on("agent_end", async (event, _ctx) => {
+    recall.invalidate();
     if (!connected || bypassed || !config.syncTurns) return;
 
-    // Extract user message from session entries
-    const branch = ctx.sessionManager.getBranch();
+    const msgs = (event.messages ?? []) as any[];
+
+    // User text: first user message of this run
     let userText = "";
-    for (let i = branch.length - 1; i >= 0; i--) {
-      const entry = branch[i];
-      if (entry.type === "message" && (entry as any).message?.role === "user") {
-        const msg = (entry as any).message;
-        userText = typeof msg.content === "string"
-          ? msg.content
-          : Array.isArray(msg.content)
-            ? msg.content
+    for (const m of msgs) {
+      if (m?.role === "user") {
+        userText = typeof m.content === "string"
+          ? m.content
+          : Array.isArray(m.content)
+            ? m.content
                 .filter((b: any) => b.type === "text")
                 .map((b: any) => b.text)
                 .join("")
@@ -157,14 +199,13 @@ export default async function (pi: ExtensionAPI) {
       }
     }
 
-    // Extract assistant text
-    const assistantMsg = event.message as any;
+    // Assistant text + tool lines across all assistant rounds of the run
     let assistantText = "";
     const toolLines: string[] = [];
     const toolNames: string[] = [];
-
-    if (assistantMsg?.content && Array.isArray(assistantMsg.content)) {
-      for (const block of assistantMsg.content) {
+    for (const m of msgs) {
+      if (m?.role !== "assistant" || !Array.isArray(m.content)) continue;
+      for (const block of m.content) {
         if (block.type === "text") {
           assistantText += block.text + "\n";
         } else if (block.type === "toolCall") {
@@ -175,32 +216,42 @@ export default async function (pi: ExtensionAPI) {
         }
       }
     }
-
-    // Add tool summary line
     if (toolNames.length > 0) {
       assistantText = `[assistant used tools: ${toolNames.join(", ")}]\n` + assistantText;
     }
 
-    await sync.syncTurn(
-      userText, assistantText, toolLines, event.turnIndex,
+    const turnTokens = await sync.syncTurn(
+      userText, assistantText, toolLines, ++runCounter,
     );
+    debugLog(`agent_end: run ${runCounter} synced ~${turnTokens} tokens (state ${JSON.stringify(takeover.state)})`);
+    // Takeover accounting: commit + advance boundary at the token threshold.
+    await takeover.onTurnSynced(turnTokens);
   });
 
   // --- session_before_compact ---
-  pi.on("session_before_compact", async (_event, _ctx) => {
+  pi.on("session_before_compact", async (event, _ctx) => {
     if (!connected || bypassed) return;
 
-    // Flush write queue + synchronous commit
+    if (config.takeoverEnabled) {
+      // Takeover: OV owns the summary. Commit, then hand pi a compaction
+      // whose summary is OV's archive overview at pi's own (tool-safe) cut
+      // point. Fail-open: undefined → pi's default compaction proceeds.
+      const prep = (event as any).preparation ?? {};
+      return await takeover.handleBeforeCompact({
+        firstKeptEntryId: prep.firstKeptEntryId,
+        tokensBefore: prep.tokensBefore ?? 0,
+      });
+    }
+
+    // Non-takeover mode: flush + commit, cache overview for rehydration,
+    // let pi's default compaction run.
     await sync.shutdown();
     const archiveId = await sync.commit(true);
-
-    // Cache archive overview for rehydration after compaction
     if (archiveId && sync.sessionId) {
       archiveOverview = await fetchArchiveOverview(
         client, sync.sessionId, config,
       );
     }
-    // Return nothing → pi proceeds with default compaction
   });
 
   // --- session_shutdown ---
@@ -231,11 +282,7 @@ export default async function (pi: ExtensionAPI) {
     if (config.commitOnShutdown) {
       await sync.commit(true);
     }
-  });
-
-  // --- agent_end ---
-  pi.on("agent_end", async (_event, _ctx) => {
-    recall.invalidate();
+    await takeover.shutdown();
   });
 
   // ================================================================
@@ -251,21 +298,26 @@ export default async function (pi: ExtensionAPI) {
       }
 
       if (args?.trim() === "commit") {
-        await sync.shutdown();
-        const result = await sync.commit(true);
-        if (result) {
+        const ok = config.takeoverEnabled
+          ? await takeover.commitAndAdvance()
+          : (await sync.shutdown(), (await sync.commit(true)) !== null);
+        if (ok) {
           await indexBuilder.buildIndex();
           ctx.ui.notify("OpenViking: committed successfully", "info");
         } else {
-          ctx.ui.notify("OpenViking: commit failed", "error");
+          ctx.ui.notify("OpenViking: commit failed (or overview pending)", "error");
         }
         return;
       }
 
       // Status
       const sid = sync.sessionId ?? "none";
+      const t = takeover.state;
+      const takeoverInfo = config.takeoverEnabled
+        ? ` | takeover: ${t.coveredUserTurns}/${t.lastSeenUserTurns} turns archived, ~${t.pendingTokens} tokens pending`
+        : "";
       ctx.ui.notify(
-        `OpenViking: ${connected ? "connected" : "disconnected"} | session: ${sid.slice(0, 12)}...`,
+        `OpenViking: ${connected ? "connected" : "disconnected"} | session: ${sid.slice(0, 12)}...${takeoverInfo}`,
         "info",
       );
     },
