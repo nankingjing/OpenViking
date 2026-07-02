@@ -262,52 +262,58 @@ def main(
 def _make_provider(config, langfuse_client: None = None):
     """Create LLM provider from configuration.
 
-    When bot.agents.provider is explicitly set, uses openviking's VLMFactory
+    When a VLM provider is configured, uses openviking's VLMFactory
     to create the appropriate VLM backend and wraps it in VLMProviderAdapter.
     Otherwise falls back to the legacy LiteLLMProvider.
     """
     from vikingbot.providers.litellm_provider import LiteLLMProvider
 
-    p = config.agents
-    model = p.model if p else None
-    temperature = p.temperature if p else 0.7
-    thinking = p.thinking if p else True
-    api_key = p.api_key if p else None
-    api_base = p.api_base if p else None
-    provider_name = p.provider if p else None
-    extra_headers = p.extra_headers if p else {}
-    timeout = p.timeout if p else None
+    provider_config = _get_bot_provider_config(config)
+    agents = getattr(config, "agents", None)
+    model = provider_config.get("model") or getattr(agents, "model", None)
+    temperature = provider_config.get("temperature", getattr(agents, "temperature", 0.7))
+    thinking = provider_config.get("thinking", getattr(agents, "thinking", True))
+    api_key = provider_config.get("api_key")
+    api_base = provider_config.get("api_base")
+    provider_name = provider_config.get("provider") or provider_config.get("backend")
+    extra_headers = provider_config.get("extra_headers") or {}
+    extra_request_body = provider_config.get("extra_request_body")
+    timeout = provider_config.get("timeout")
 
     if not model:
         raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
 
-    # When provider is explicitly set, use VLMFactory to get the correct
-    # backend (e.g. VolcEngineVLM for volcengine, OpenAIVLM for openai).
-    # The VLM backend handles model name resolution internally, so no
-    # manual LiteLLM prefix is needed.
+    vlm_instance = None
+    if hasattr(config, "get_bot_vlm_instance"):
+        vlm_instance = config.get_bot_vlm_instance()
+
+    # When VLM config is available, use openviking's VLM backend (including
+    # default OpenAI provider, credentials, and failover) and wrap it for bot.
+    if vlm_instance is not None:
+        from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+        return VLMProviderAdapter(
+            vlm_instance=vlm_instance,
+            default_model=getattr(vlm_instance, "model", None) or model,
+            langfuse_client=langfuse_client,
+        )
+
+    # Compatibility path for tests or non-Config callers that expose provider
+    # fields but do not implement get_bot_vlm_instance().
     if provider_name:
         from openviking.models.vlm.base import VLMFactory
         from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
-        vlm_config: dict[str, Any] = {
-            "provider": provider_name,
-            "model": model,
-            "temperature": temperature,
-            "thinking": thinking,
-        }
-        if timeout is not None:
-            vlm_config["timeout"] = timeout
-        if api_key:
-            vlm_config["api_key"] = api_key
-        if api_base:
-            vlm_config["api_base"] = api_base
-        if extra_headers:
-            vlm_config["extra_headers"] = extra_headers
-
+        vlm_config = dict(provider_config)
+        vlm_config["provider"] = provider_name
+        vlm_config["model"] = model
+        vlm_config.setdefault("temperature", temperature)
+        vlm_config.setdefault("thinking", thinking)
         vlm_instance = VLMFactory.create(vlm_config)
+
         return VLMProviderAdapter(
             vlm_instance=vlm_instance,
-            default_model=model,
+            default_model=getattr(vlm_instance, "model", None) or model,
             langfuse_client=langfuse_client,
         )
 
@@ -324,8 +330,40 @@ def _make_provider(config, langfuse_client: None = None):
         provider_name=provider_name,
         timeout=timeout,
         thinking=thinking,
+        extra_request_body=extra_request_body,
         langfuse_client=langfuse_client,
     )
+
+
+def _get_bot_provider_config(config) -> dict[str, Any]:
+    if hasattr(config, "get_bot_vlm_config"):
+        return config.get_bot_vlm_config()
+
+    agents = getattr(config, "agents", None)
+    if agents is None:
+        return {}
+
+    fields = (
+        "model",
+        "provider",
+        "api_key",
+        "forward_api_key",
+        "api_base",
+        "temperature",
+        "thinking",
+        "timeout",
+        "max_tokens",
+        "max_retries",
+        "extra_headers",
+        "extra_request_body",
+        "api_version",
+        "stream",
+    )
+    return {
+        field: getattr(agents, field)
+        for field in fields
+        if hasattr(agents, field) and getattr(agents, field) not in (None, "", {})
+    }
 
 
 # ============================================================================
@@ -446,13 +484,18 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
             logger.warning("Langfuse: configured but failed to initialize")
 
     provider = _make_provider(config, langfuse_client)
+    bot_provider_config = config.get_bot_vlm_config()
+    agent_model = bot_provider_config.get("model") or config.agents.model
+    agent_temperature = bot_provider_config.get("temperature", config.agents.temperature)
+    agent_max_tokens = bot_provider_config.get("max_tokens")
     # Create agent with cron service
     agent = AgentLoop(
         bus=bus,
         provider=provider,
         workspace=config.workspace_path,
-        model=config.agents.model,
-        temperature=config.agents.temperature,
+        model=agent_model,
+        temperature=agent_temperature,
+        max_tokens=agent_max_tokens,
         max_iterations=config.agents.max_tool_iterations,
         memory_window=config.agents.memory_window,
         brave_api_key=config.tools.web.search.api_key or None,
@@ -1134,7 +1177,8 @@ def status():
     if config_path.exists():
         from vikingbot.providers.registry import PROVIDERS
 
-        console.print(f"Model: {config.agents.model}")
+        bot_provider_config = config.get_bot_vlm_config()
+        console.print(f"Model: {bot_provider_config.get('model') or config.agents.model}")
 
         # Check API keys from registry
         for spec in PROVIDERS:

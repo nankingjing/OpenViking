@@ -454,6 +454,19 @@ class AgentsConfig(BaseModel):
             "inherits vlm.timeout from ov.conf if present."
         ),
     )
+    max_tokens: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Maximum tokens for bot LLM responses. When omitted, vikingbot inherits "
+            "vlm.max_tokens from ov.conf if present; provider defaults are used otherwise."
+        ),
+    )
+    max_retries: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Maximum retry attempts inherited by VLM-backed providers.",
+    )
     max_tool_iterations: int = 50
     memory_window: int = 50
     session_context_enabled: bool = False
@@ -463,8 +476,12 @@ class AgentsConfig(BaseModel):
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
     provider: str = ""
     api_key: str = ""
+    forward_api_key: Optional[bool] = None
     api_base: str = ""
     extra_headers: Optional[dict[str, str]] = Field(default_factory=dict)
+    extra_request_body: Optional[dict[str, Any]] = None
+    api_version: Optional[str] = None
+    stream: Optional[bool] = None
 
 
 class ProviderConfig(BaseModel):
@@ -749,6 +766,9 @@ class SandboxConfig(BaseModel):
 class Config(BaseSettings):
     """Root configuration for vikingbot."""
 
+    _vlm_config_data: dict[str, Any] | None = PrivateAttr(default_factory=dict)
+    _agent_config_data: dict[str, Any] | None = PrivateAttr(default=None)
+
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: list[Any] = Field(default_factory=list)
     providers: ProvidersConfig = Field(
@@ -806,13 +826,158 @@ class Config(BaseSettings):
 
     def _get_vlm_config(self) -> Optional[Dict[str, Any]]:
         """Get vlm config from OpenVikingConfig. Returns (vlm_config_dict)."""
-        from openviking_cli.utils.config import get_openviking_config
-
-        ov_config = get_openviking_config()
-
-        if hasattr(ov_config, "vlm"):
-            return ov_config.vlm.model_dump()
+        if self._vlm_config_data:
+            return dict(self._vlm_config_data)
         return None
+
+    def set_vlm_config_data(self, vlm_data: dict[str, Any] | None) -> None:
+        """Attach the raw top-level ov.conf vlm section used to build this bot config."""
+        self._vlm_config_data = dict(vlm_data or {})
+
+    def set_agent_config_data(self, agent_data: dict[str, Any] | None) -> None:
+        """Attach the raw bot.agents section so overrides can be detected exactly."""
+        self._agent_config_data = dict(agent_data or {})
+
+    def get_bot_vlm_config(self) -> dict[str, Any]:
+        """
+        Resolve the VLM provider config used by VikingBot.
+
+        The top-level ov.conf ``vlm`` section is the source of truth. Provider
+        fields under ``bot.agents`` are treated only as compatibility overrides,
+        and default/empty agent values do not mask the top-level VLM config.
+        """
+        vlm_data = self._get_vlm_config() or {}
+        raw_config = self._build_bot_vlm_raw_config()
+        if self._has_vlm_config(vlm_data):
+            return self._normalize_vlm_config(raw_config)
+
+        resolved = {
+            key: value
+            for key, value in raw_config.items()
+            if key in self._bot_provider_override_fields()
+            and not self._is_unset_provider_value(value)
+        }
+        resolved.setdefault("model", self.agents.model)
+        return resolved
+
+    def get_bot_vlm_instance(self):
+        """Create the VLM instance used by VikingBot, preserving VLM failover semantics."""
+        vlm_data = self._get_vlm_config() or {}
+        raw_config = self._build_bot_vlm_raw_config()
+        if not self._has_vlm_config(vlm_data):
+            return None
+
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        vlm_config = VLMConfig.model_validate(raw_config)
+        vlm_instance = vlm_config.get_vlm_instance()
+        if hasattr(vlm_instance, "thinking"):
+            vlm_instance.thinking = vlm_config.thinking
+        return vlm_instance
+
+    def _build_bot_vlm_raw_config(self) -> dict[str, Any]:
+        raw_config = {
+            key: value
+            for key, value in (self._get_vlm_config() or {}).items()
+            if not self._is_unset_provider_value(value)
+        }
+
+        for field in self._explicit_agent_provider_fields():
+            value = getattr(self.agents, field)
+            if not self._is_unset_provider_value(value):
+                raw_config[field] = value
+
+        if "model" not in raw_config or not raw_config.get("model"):
+            raw_config["model"] = self.agents.model
+        return raw_config
+
+    def _normalize_vlm_config(self, raw_config: dict[str, Any]) -> dict[str, Any]:
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        vlm_config = VLMConfig.model_validate(raw_config)
+        if vlm_config.credentials:
+            credential = vlm_config.credentials[0]
+            result = vlm_config._build_vlm_config_dict_for_credential(credential)
+        else:
+            result = vlm_config._build_vlm_config_dict()
+        return {
+            key: value
+            for key, value in result.items()
+            if not self._is_unset_provider_value(value)
+        }
+
+    def _explicit_agent_provider_fields(self) -> set[str]:
+        if self._agent_config_data is None:
+            fields = set(self.agents.model_fields_set)
+        else:
+            fields = set(self._agent_config_data)
+
+        fields &= set(self._bot_provider_override_fields())
+        if self._agent_config_data is not None and self._looks_like_generated_default_agents_config():
+            fields = {
+                field
+                for field in fields
+                if getattr(self.agents, field) != getattr(AgentsConfig(), field)
+            }
+        return fields
+
+    def _looks_like_generated_default_agents_config(self) -> bool:
+        if self._agent_config_data is None:
+            return False
+
+        defaults = AgentsConfig()
+        provider_fields = set(self._bot_provider_override_fields())
+        present_provider_fields = set(self._agent_config_data) & provider_fields
+        if not present_provider_fields:
+            return False
+
+        for field in present_provider_fields:
+            if field not in AgentsConfig.model_fields:
+                continue
+            if getattr(self.agents, field) != getattr(defaults, field):
+                return False
+        return len(self._agent_config_data) >= 4
+
+    @staticmethod
+    def _has_vlm_config(raw_config: dict[str, Any]) -> bool:
+        if any(
+            raw_config.get(field)
+            for field in (
+                "api_key",
+                "api_base",
+                "provider",
+                "backend",
+                "default_provider",
+                "providers",
+                "credentials",
+                "backup",
+            )
+        ):
+            return True
+        return bool(raw_config.get("model") and raw_config.get("api_key"))
+
+    @staticmethod
+    def _bot_provider_override_fields() -> tuple[str, ...]:
+        return (
+            "model",
+            "provider",
+            "api_key",
+            "forward_api_key",
+            "api_base",
+            "temperature",
+            "thinking",
+            "timeout",
+            "max_tokens",
+            "max_retries",
+            "extra_headers",
+            "extra_request_body",
+            "api_version",
+            "stream",
+        )
+
+    @staticmethod
+    def _is_unset_provider_value(value: Any) -> bool:
+        return value is None or value == "" or value == {}
 
     def _match_provider(
         self, model: str | None = None

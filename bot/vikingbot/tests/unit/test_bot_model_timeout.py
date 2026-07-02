@@ -4,8 +4,7 @@ from unittest import mock
 import pytest
 from pydantic import ValidationError
 
-from vikingbot.config.loader import _merge_vlm_model_config
-from vikingbot.config.schema import AgentsConfig
+from vikingbot.config.schema import AgentsConfig, Config
 from vikingbot.providers.litellm_provider import LiteLLMProvider
 
 
@@ -32,29 +31,33 @@ def test_agents_config_rejects_non_positive_timeout():
         AgentsConfig(timeout=0)
 
 
-def test_bot_agents_timeout_inherits_vlm_timeout_when_omitted():
-    bot_data = {"agents": {"model": "bot-model"}}
+def test_bot_provider_config_inherits_vlm_timeout_when_omitted():
+    config = Config.model_validate({"agents": {"model": "bot-model"}})
+    config.set_vlm_config_data({"model": "vlm-model", "timeout": 180.0})
 
-    _merge_vlm_model_config(bot_data, {"model": "vlm-model", "timeout": 180.0})
+    provider_config = config.get_bot_vlm_config()
 
-    assert bot_data["agents"]["model"] == "bot-model"
-    assert bot_data["agents"]["timeout"] == 180.0
-
-
-def test_bot_agents_timeout_inherits_vlm_default_timeout_when_omitted():
-    bot_data = {"agents": {"model": "bot-model"}}
-
-    _merge_vlm_model_config(bot_data, {"model": "vlm-model"})
-
-    assert bot_data["agents"]["timeout"] == 60.0
+    assert provider_config["model"] == "bot-model"
+    assert provider_config["timeout"] == 180.0
 
 
-def test_bot_agents_timeout_overrides_vlm_timeout():
-    bot_data = {"agents": {"model": "bot-model", "timeout": 45.0}}
+def test_bot_provider_config_omits_timeout_when_vlm_timeout_is_unset():
+    config = Config.model_validate({"agents": {"model": "bot-model"}})
+    config.set_vlm_config_data({"model": "vlm-model"})
 
-    _merge_vlm_model_config(bot_data, {"model": "vlm-model", "timeout": 180.0})
+    provider_config = config.get_bot_vlm_config()
 
-    assert bot_data["agents"]["timeout"] == 45.0
+    assert provider_config["model"] == "bot-model"
+    assert "timeout" not in provider_config
+
+
+def test_bot_provider_config_timeout_overrides_vlm_timeout():
+    config = Config.model_validate({"agents": {"model": "bot-model", "timeout": 45.0}})
+    config.set_vlm_config_data({"model": "vlm-model", "timeout": 180.0})
+
+    provider_config = config.get_bot_vlm_config()
+
+    assert provider_config["timeout"] == 45.0
 
 
 @pytest.mark.asyncio

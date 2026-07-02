@@ -104,12 +104,9 @@ def load_config() -> Config:
             else:
                 bot_data["storage_workspace"] = "~/.openviking/data"
 
-            # Extract and merge vlm config for model settings only
-            # Provider config is directly read from OpenVikingConfig at runtime
             vlm_data = full_data.get("vlm", {})
             vlm_data = convert_keys(vlm_data)
-            if vlm_data:
-                _merge_vlm_model_config(bot_data, vlm_data)
+            _merge_vlm_model_config(bot_data, vlm_data)
 
             bot_server_data = bot_data.get("ov_server", {})
             ov_server_data = full_data.get("server", {})
@@ -117,6 +114,8 @@ def load_config() -> Config:
             bot_data["ov_server"] = bot_server_data
 
             config = Config.model_validate(bot_data)
+            config.set_vlm_config_data(vlm_data)
+            config.set_agent_config_data(bot_data.get("agents"))
             config.ov_server.set_effective_auth_mode(effective_auth_mode)
 
             return config
@@ -129,33 +128,13 @@ def load_config() -> Config:
 
 def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
     """
-    Merge vlm model config into bot config.
+    Keep backward-compatible bot config shape for callers that still invoke the
+    old merge hook.
 
-    Only sets model parameters - provider config is read directly from OpenVikingConfig.
+    Provider inheritance is resolved at runtime by Config.get_bot_vlm_config()
+    so the top-level ov.conf vlm section remains the source of truth.
     """
-    if vlm_data:
-        if "agents" not in bot_data:
-            bot_data["agents"] = {}
-
-    agents = bot_data.get("agents", {})
-    if vlm_data and "timeout" not in agents:
-        agents["timeout"] = vlm_data["timeout"] if "timeout" in vlm_data else 60.0
-
-    # Set default model from vlm.model
-    if "agents" in bot_data:
-        if "model" in agents and agents["model"]:
-            return
-    if vlm_data.get("model"):
-        model = vlm_data["model"]
-        provider = vlm_data.get("provider")
-        agents["model"] = model
-        agents["provider"] = provider if provider else ""
-        agents["api_base"] = vlm_data.get("api_base", "")
-        agents["api_key"] = vlm_data.get("api_key", "")
-        if "temperature" in vlm_data and "temperature" not in agents:
-            agents["temperature"] = vlm_data["temperature"]
-        if "extra_headers" in vlm_data and vlm_data["extra_headers"] is not None:
-            agents["extra_headers"] = vlm_data["extra_headers"]
+    return
 
 
 def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> str:
