@@ -14,7 +14,7 @@ import httpx
 from loguru import logger
 
 from vikingbot.config import load_config
-from vikingbot.utils import get_data_path
+from vikingbot.utils import detect_image_format, get_data_path
 
 # Optional HTML processing libraries
 try:
@@ -158,13 +158,22 @@ class FeishuChannel(BaseChannel):
 
         headers = {"Authorization": f"Bearer {token}"}
 
-        # Use io.BytesIO properly
-        files = {"image": ("image.png", io.BytesIO(image_data), "image/png")}
+        image_format = detect_image_format(image_data)
+        files = {
+            "image": (
+                f"image.{image_format.extension}",
+                io.BytesIO(image_data),
+                image_format.mime_type,
+            )
+        }
         data = {"image_type": "message"}
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, headers=headers, data=data, files=files)
-            # logger.debug(f"Upload response status: {resp.status_code}")
+            if resp.is_error:
+                logger.error(
+                    f"Feishu image upload failed: status={resp.status_code}, body={resp.text}"
+                )
             resp.raise_for_status()
             result = resp.json()
             if result.get("code") != 0:
