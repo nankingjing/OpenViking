@@ -869,16 +869,17 @@ class Config(BaseSettings):
 
         from openviking_cli.utils.config.vlm_config import VLMConfig
 
-        vlm_config = VLMConfig.model_validate(raw_config)
+        vlm_config = VLMConfig.model_validate(self._build_bot_vlm_instance_config(raw_config))
         vlm_instance = vlm_config.get_vlm_instance()
         if hasattr(vlm_instance, "thinking"):
             vlm_instance.thinking = vlm_config.thinking
         return vlm_instance
 
     def _build_bot_vlm_raw_config(self) -> dict[str, Any]:
+        vlm_data = self._get_vlm_config() or {}
         raw_config = {
             key: value
-            for key, value in (self._get_vlm_config() or {}).items()
+            for key, value in vlm_data.items()
             if not self._is_unset_provider_value(value)
         }
 
@@ -891,6 +892,12 @@ class Config(BaseSettings):
             raw_config["model"] = self.agents.model
         return raw_config
 
+    def _build_bot_vlm_instance_config(self, raw_config: dict[str, Any]) -> dict[str, Any]:
+        instance_config = dict(raw_config)
+        instance_config.setdefault("temperature", self.agents.temperature)
+        instance_config.setdefault("thinking", self.agents.thinking)
+        return instance_config
+
     def _normalize_vlm_config(self, raw_config: dict[str, Any]) -> dict[str, Any]:
         from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -900,10 +907,29 @@ class Config(BaseSettings):
             result = vlm_config._build_vlm_config_dict_for_credential(credential)
         else:
             result = vlm_config._build_vlm_config_dict()
+        provider_fields = {
+            "model",
+            "provider",
+            "api_key",
+            "forward_api_key",
+            "api_base",
+            "extra_headers",
+            "extra_request_body",
+        }
+        behavior_fields = {
+            "temperature",
+            "thinking",
+            "timeout",
+            "max_tokens",
+            "max_retries",
+            "api_version",
+            "stream",
+        }
+        allowed_fields = provider_fields | (behavior_fields & raw_config.keys())
         return {
             key: value
             for key, value in result.items()
-            if not self._is_unset_provider_value(value)
+            if not self._is_unset_provider_value(value) and key in allowed_fields
         }
 
     def _explicit_agent_provider_fields(self) -> set[str]:

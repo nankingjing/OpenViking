@@ -111,7 +111,9 @@ class VLMProviderAdapter(LLMProvider):
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
-        if getattr(self._vlm, "provider", None) != "volcengine":
+        if getattr(self._vlm, "provider", None) != "volcengine" or not hasattr(
+            self._vlm, "get_async_client"
+        ):
             async for event in super().chat_stream(
                 messages=messages,
                 tools=tools,

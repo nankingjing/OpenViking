@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from vikingbot.config.schema import AgentsConfig
+from vikingbot.providers.base import LLMResponse
 from vikingbot.providers.litellm_provider import LiteLLMProvider
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
@@ -80,6 +81,29 @@ def test_make_provider_passes_default_thinking_to_vlm_adapter(monkeypatch):
     assert captured["api_version"] == "2026-01-01"
     assert captured["stream"] is True
     assert provider._vlm.thinking is True
+
+
+@pytest.mark.asyncio
+async def test_vlm_adapter_stream_uses_chat_fallback_for_volcengine_wrappers():
+    class WrapperVLM:
+        provider = "volcengine"
+        model = "ep-test"
+        thinking = True
+
+        async def get_completion_async(self, **kwargs):
+            return "ok"
+
+    adapter = VLMProviderAdapter(WrapperVLM(), default_model="ep-test")
+
+    events = [
+        event
+        async for event in adapter.chat_stream(messages=[{"role": "user", "content": "hi"}])
+    ]
+
+    assert len(events) == 1
+    assert events[0].type == "response"
+    assert isinstance(events[0].response, LLMResponse)
+    assert events[0].response.content == "ok"
 
 
 @pytest.mark.asyncio

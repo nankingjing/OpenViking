@@ -200,6 +200,28 @@ def test_bot_provider_config_uses_vlm_defaults_without_explicit_provider():
     assert vlm_instance.__class__.__name__ == "OpenAIVLM"
 
 
+def test_bot_provider_config_does_not_inherit_implicit_vlm_behavior_defaults():
+    config = _config_with_vlm(
+        {},
+        {
+            "model": "qwen-plus",
+            "provider": "dashscope",
+            "api_key": "sk-test",
+        },
+    )
+
+    provider_config = config.get_bot_vlm_config()
+    vlm_instance = config.get_bot_vlm_instance()
+
+    assert "temperature" not in provider_config
+    assert "thinking" not in provider_config
+    assert "timeout" not in provider_config
+    assert "max_retries" not in provider_config
+    assert "stream" not in provider_config
+    assert vlm_instance.temperature == 0.7
+    assert vlm_instance.thinking is True
+
+
 def test_make_provider_uses_vlm_defaults_without_explicit_provider(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
