@@ -81,6 +81,7 @@ class VLMProviderAdapter(LLMProvider):
             # --- Call VLM backend ---
             result = await self._vlm.get_completion_async(
                 messages=messages,
+                thinking=getattr(self._vlm, "thinking", None),
                 tools=tools,
                 tool_choice="auto" if tools else None,
             )

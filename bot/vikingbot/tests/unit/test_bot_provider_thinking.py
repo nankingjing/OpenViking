@@ -6,6 +6,7 @@ import pytest
 
 from vikingbot.config.schema import AgentsConfig
 from vikingbot.providers.litellm_provider import LiteLLMProvider
+from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 
 def test_agents_config_defaults_thinking_enabled():
@@ -119,6 +120,46 @@ async def test_litellm_bot_provider_enables_dashscope_thinking(monkeypatch):
     )
     await provider.chat(messages=[{"role": "user", "content": "hi"}])
 
+    assert captured["extra_body"] == {"enable_thinking": True}
+
+
+@pytest.mark.asyncio
+async def test_vlm_adapter_preserves_dashscope_thinking(monkeypatch):
+    from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+
+    captured = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        "openviking.models.vlm.backends.litellm_vlm.acompletion",
+        fake_acompletion,
+    )
+
+    vlm = LiteLLMVLMProvider(
+        {
+            "provider": "dashscope",
+            "model": "qwen-plus",
+            "api_key": "sk-test",
+            "thinking": True,
+        }
+    )
+    provider = VLMProviderAdapter(vlm, default_model="qwen-plus")
+
+    response = await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert response.content == "ok"
+    assert captured["model"] == "dashscope/qwen-plus"
     assert captured["extra_body"] == {"enable_thinking": True}
 
 
