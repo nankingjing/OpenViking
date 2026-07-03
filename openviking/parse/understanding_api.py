@@ -62,10 +62,11 @@ class UnderstandingAPI(BaseParser):
         self._video_exts = {"mp4", "mov", "avi", "flv", "mkv", "wmv", "webm"}
         self._audio_exts = {"mp3", "wav", "m4a", "flac", "aac", "ogg"}
         self._image_exts = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
+        self._model_exts = {"glb"}
 
     @property
     def supported_extensions(self) -> List[str]:
-        return [".pdf", ".docx", ".pptx", ".xlsx", ".mp4", ".mp3", ".wav", ".mov"]
+        return [".pdf", ".docx", ".pptx", ".xlsx", ".mp4", ".mp3", ".wav", ".mov", ".glb"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
@@ -144,6 +145,8 @@ class UnderstandingAPI(BaseParser):
             if doc_type in self._audio_exts
             else "image"
             if doc_type in self._image_exts
+            else "model"
+            if doc_type in self._model_exts
             else "text"
         )
         root_node = ResourceNode(
@@ -181,7 +184,10 @@ class UnderstandingAPI(BaseParser):
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
     def _auth_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "x-kb-env": "snake",
+        }
         if extra:
             headers.update(extra)
         return headers
@@ -258,6 +264,8 @@ class UnderstandingAPI(BaseParser):
             content = {"type": "input_image", "image_url": url}
         elif doc_type in self._audio_exts:
             content = {"type": "input_audio", "audio_url": url}
+        elif doc_type in self._model_exts:
+            content = {"type": "input_file", "file_url": url}
         else:
             content = {"type": "input_file", "file_url": url}
         payload = {

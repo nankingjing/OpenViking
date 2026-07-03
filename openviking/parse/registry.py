@@ -21,7 +21,7 @@ from openviking.parse.parsers.html import HTMLParser
 # Import markitdown-inspired parsers
 from openviking.parse.parsers.legacy_doc import LegacyDocParser
 from openviking.parse.parsers.markdown import MarkdownParser
-from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
+from openviking.parse.parsers.media import AudioParser, ImageParser, ModelParser, VideoParser
 from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
@@ -78,6 +78,7 @@ class ParserRegistry:
         self.register("image", ImageParser())
         self.register("audio", AudioParser())
         self.register("video", VideoParser())
+        self.register("model", ModelParser())
 
     def register(self, name: str, parser: BaseParser) -> None:
         """

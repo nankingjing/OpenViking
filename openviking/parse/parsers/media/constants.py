@@ -11,5 +11,8 @@ AUDIO_EXTENSIONS = [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus"]
 # Video extensions supported by VideoParser
 VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"]
 
+# Model extensions supported by ModelParser
+MODEL_EXTENSIONS = [".glb"]
+
 # All media extensions combined
-MEDIA_EXTENSIONS = set(IMAGE_EXTENSIONS + AUDIO_EXTENSIONS + VIDEO_EXTENSIONS)
+MEDIA_EXTENSIONS = set(IMAGE_EXTENSIONS + AUDIO_EXTENSIONS + VIDEO_EXTENSIONS + MODEL_EXTENSIONS)
