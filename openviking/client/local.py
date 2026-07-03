@@ -12,7 +12,6 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.skills import (
     _list_skill_files,
     _list_skills_from_root,
-    _merge_skills,
     _require_skill,
     _restore_skill_privacy,
     _skill_summary_from_hit,
@@ -290,11 +289,11 @@ class LocalClient(BaseClient):
     ) -> Dict[str, Any]:
         """Get a skill by name."""
         from openviking.server.routers.skills import (
+            SOURCE_METADATA_FILENAME,
             _parse_abstract_meta,
             _relative_skill_path,
             _skill_file_kind,
             _skill_summary_from_meta,
-            SOURCE_METADATA_FILENAME,
         )
         from openviking.server.skill_source_metadata import read_skill_source_metadata
 
@@ -315,7 +314,11 @@ class LocalClient(BaseClient):
             result["abstract"] = abstract
         if level is None or level == 1:
             result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
-        if level == 2 or include_content is True or (level is None and include_content is not False):
+        if (
+            level == 2
+            or include_content is True
+            or (level is None and include_content is not False)
+        ):
             from openviking.server.routers.skills import _skill_md_uri
 
             result["content"] = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
@@ -476,7 +479,7 @@ class LocalClient(BaseClient):
         service = self._service
         ctx = self._ctx
         root_uri = await _require_skill(service, ctx, skill_name, target_uri)
-        result = await service.fs.rm(root_uri, ctx=ctx, recursive=True)
+        await service.fs.rm(root_uri, ctx=ctx, recursive=True)
         return {"name": skill_name, "uri": root_uri, "root_uri": root_uri, "deleted": True}
 
     async def validate_skill(
@@ -506,12 +509,14 @@ class LocalClient(BaseClient):
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
         return await self._service.reindex(
             uri=uri,
             mode=mode,
             wait=wait,
+            dry_run=dry_run,
         )
 
     async def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:

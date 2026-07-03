@@ -21,7 +21,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -58,6 +58,7 @@ class ReindexRequest(BaseModel):
     uri: str
     mode: str = "vectors_only"
     wait: bool = True
+    dry_run: bool = False
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
@@ -242,6 +243,8 @@ async def reindex(
     ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
+    if body.dry_run and body.mode != "prune_orphans":
+        raise InvalidArgumentError("dry_run is only supported for prune_orphans reindex mode.")
     uri = resolve_path_variables(body.uri)
     uri = _validate_reindex_uri(uri)
     service = get_service()
@@ -249,6 +252,7 @@ async def reindex(
         uri=uri,
         mode=body.mode,
         wait=body.wait,
+        dry_run=body.dry_run,
         ctx=ctx,
     )
     return Response(status="ok", result=result)
