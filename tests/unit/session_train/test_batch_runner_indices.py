@@ -7,6 +7,7 @@ from openviking.session.train.batch_runner import (
     BatchTrainEvalConfig,
     _baseline_cache_key,
     _case_loader,
+    _effective_eval_index,
 )
 
 
@@ -94,3 +95,48 @@ def test_train_trials_defaults_to_one_and_validates_positive():
             train_trials=0,
             benchmark_service_url="http://127.0.0.1:1944",
         )
+
+
+def test_eval_split_train_defaults_eval_index_to_train_index():
+    config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        train_index=[5, 6],
+        eval_split="train",
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    eval_loader = _case_loader(
+        config,
+        split=config.eval_split,
+        sample_index=_effective_eval_index(config),
+    )
+
+    assert config.eval_index is None
+    assert _effective_eval_index(config) == [5, 6]
+    assert eval_loader.filters == {"task_indices": [5, 6]}
+
+
+def test_explicit_eval_index_overrides_train_index_for_train_split_eval():
+    config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        train_index=[5, 6],
+        eval_index=29,
+        eval_split="train",
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    assert _effective_eval_index(config) == [29]
+
+
+def test_test_split_eval_does_not_implicitly_use_train_index():
+    config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        train_index=[5, 6],
+        eval_split="test",
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    assert _effective_eval_index(config) is None

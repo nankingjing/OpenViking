@@ -87,6 +87,36 @@ def test_baseline_cache_key_depends_on_trials_eval_index_and_split():
     )
 
 
+def test_train_split_baseline_cache_key_uses_effective_eval_index():
+    implicit = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        eval_split="train",
+        train_index=[5, 6],
+        trials=8,
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+    explicit = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        eval_split="train",
+        train_index=[5, 6],
+        eval_index=[5, 6],
+        trials=8,
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+    all_train = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        eval_split="train",
+        trials=8,
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    assert _baseline_cache_key(implicit) == _baseline_cache_key(explicit)
+    assert _baseline_cache_key(implicit) != _baseline_cache_key(all_train)
+
+
 def test_baseline_cache_round_trips_report(tmp_path: Path):
     cache_path = tmp_path / "baseline.json"
     config = BatchTrainEvalConfig(

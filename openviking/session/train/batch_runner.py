@@ -163,6 +163,21 @@ def _normalize_index_filter(value: Any, *, label: str) -> list[int] | None:
     return result
 
 
+def _effective_eval_index(config: BatchTrainEvalConfig) -> list[int] | None:
+    """Return the task-index filter that should actually be used for eval.
+
+    An explicit --eval-index always wins. When evaluating the train split without
+    an explicit eval override, reuse --train-index so train-split eval targets the
+    same subset that produced the training rollouts.
+    """
+
+    if config.eval_index is not None:
+        return config.eval_index
+    if config.eval_split == "train":
+        return config.train_index
+    return None
+
+
 @dataclass(slots=True)
 class BatchTrainEvalReport:
     """Serializable report for remote benchmark batch train/eval."""
@@ -271,6 +286,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 "run_timestamp": config.run_timestamp,
             },
         )
+        effective_eval_index = _effective_eval_index(config)
         await event_recorder.record(
             "run_start",
             stage="run_start",
@@ -279,6 +295,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             commit_concurrency=config.commit_concurrency,
             train_index=_index_payload(config.train_index),
             eval_index=_index_payload(config.eval_index),
+            effective_eval_index=_index_payload(effective_eval_index),
             trials=config.trials,
             train_trials=config.train_trials,
             reuse_train_rollout_cache=config.reuse_train_rollout_cache,
@@ -336,7 +353,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             else _case_loader(
                 config,
                 split=config.eval_split,
-                sample_index=config.eval_index,
+                sample_index=effective_eval_index,
             )
         )
         if (
@@ -451,7 +468,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
             train_index=_index_payload(config.train_index),
-            eval_index=_index_payload(config.eval_index),
+            eval_index=_index_payload(effective_eval_index),
             policy_root_uri=policy_root_uri,
             baseline_eval=baseline_eval,
             train_epochs=list(train_result.metadata.get("train_reports", [])),
@@ -642,13 +659,14 @@ def _write_baseline_cache(
     *,
     config: BatchTrainEvalConfig,
 ) -> None:
+    effective_eval_index = _effective_eval_index(config)
     payload = {
         "cache_version": 1,
         "cache_key": _baseline_cache_key(config),
         "dataset": config.dataset,
         "domain": config.domain,
         "split": config.eval_split,
-        "eval_index": _index_payload(config.eval_index),
+        "eval_index": _index_payload(effective_eval_index),
         "trials": config.trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
@@ -1013,18 +1031,19 @@ def _train_rollout_cache_key_prefix(config: BatchTrainEvalConfig) -> str:
 
 
 def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
+    effective_eval_index = _effective_eval_index(config)
     payload = {
         "dataset": config.dataset,
         "domain": config.domain,
         "split": config.eval_split,
-        "eval_index": _index_payload(config.eval_index),
+        "eval_index": _index_payload(effective_eval_index),
         "trials": config.trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
-    index = _index_label(config.eval_index)
+    index = _index_label(effective_eval_index)
     split = _cache_slug(str(config.eval_split or "none"))
     return f"{_cache_slug(config.domain)}_{split}_index-{index}_trials-{config.trials}_{digest}"
 
