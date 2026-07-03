@@ -27,6 +27,7 @@ from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
+    MODEL_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
@@ -62,6 +63,7 @@ class URLType(Enum):
     DOWNLOAD_AUDIO = "download_audio"  # Audio file download link
     DOWNLOAD_VIDEO = "download_video"  # Video file download link
     DOWNLOAD_DOCUMENT = "download_document"  # Office/e-book/archive document link
+    DOWNLOAD_MODEL = "download_model"  # 3D model file download link
     UNKNOWN = "unknown"  # Unknown or unsupported type
 
 
@@ -96,6 +98,7 @@ class URLTypeDetector:
         **dict.fromkeys(AUDIO_EXTENSIONS, URLType.DOWNLOAD_AUDIO),
         **dict.fromkeys(VIDEO_EXTENSIONS, URLType.DOWNLOAD_VIDEO),
         **dict.fromkeys(DOCUMENT_EXTENSIONS, URLType.DOWNLOAD_DOCUMENT),
+        **dict.fromkeys(MODEL_EXTENSIONS, URLType.DOWNLOAD_MODEL),
     }
 
     # === IANA Media Type to URL type mapping ===
@@ -146,6 +149,7 @@ class URLTypeDetector:
         URLType.DOWNLOAD_AUDIO: ".mp3",
         URLType.DOWNLOAD_VIDEO: ".mp4",
         URLType.DOWNLOAD_DOCUMENT: ".zip",
+        URLType.DOWNLOAD_MODEL: ".glb",
         URLType.UNKNOWN: ".html",
     }
 
@@ -702,6 +706,8 @@ class HTTPAccessor(DataAccessor):
             or sample.startswith(b"PK\x07\x08")
         ):
             return URLType.DOWNLOAD_DOCUMENT, HTTPAccessor._detect_zip_based_extension(content)
+        if len(sample) >= 4 and sample[:4] == b"glTF":
+            return URLType.DOWNLOAD_MODEL, ".glb"
         return URLType.UNKNOWN, None
 
     @staticmethod
