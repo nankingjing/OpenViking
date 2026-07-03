@@ -1,5 +1,21 @@
 # Pi OpenViking Extension — Implementation Spec
 
+> **2026-07 addendum — read this first.** This spec predates the 0.80.x
+> upgrade and the context-takeover layer; the following deltas supersede it:
+> - Package scope is `@earendil-works/*` (was `@mariozechner/*`).
+> - Capture happens on **`agent_end`** (once per run, all user messages incl.
+>   steering), NOT `turn_end` — pi's `turnIndex` resets per prompt, which made
+>   turn-based dedup skip the first round of every run.
+> - Startup is an idempotent `start()` reached from both `session_start` and
+>   `before_agent_start` (`pi -c` continuations skip session_start), and OV's
+>   `ALREADY_EXISTS` on session creation counts as success.
+> - With `takeover.enabled` (default) OV owns long-term context — see
+>   [TAKEOVER.md](./TAKEOVER.md): boundary + overview injection via the
+>   `context` hook, OV summary supplied to `session_before_compact`, faithful
+>   capture mode, `commitTokenThreshold` ignored.
+> - The extension now has a dev `package.json`, a 140+-test vitest suite, and
+>   a live e2e acceptance script (`scripts/e2e-live.sh`).
+
 ## Design Philosophy
 
 **Informed by all three existing OV plugins** — OpenClaw, Claude Code, and Hermes. The Claude Code plugin is the most mature and production-hardened; its patterns take precedence where they differ from OpenClaw. Key design ancestors:

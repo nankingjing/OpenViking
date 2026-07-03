@@ -33,6 +33,24 @@ export function estimateTokens(text: string): number {
   return Math.ceil(cjk * 1.5 + other / 4);
 }
 
+/**
+ * Truncate text to an estimated token budget. Char-based slicing (`budget * 3`)
+ * overshoots the budget by up to ~4.5x on CJK-heavy text (1.5 est. tokens per
+ * CJK char vs 0.25 per ASCII char) — this walks the estimate down instead.
+ */
+export function truncateToTokens(text: string, budget: number): string {
+  if (estimateTokens(text) <= budget) return text;
+  // Binary search the largest prefix within budget.
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (estimateTokens(text.slice(0, mid)) <= budget) lo = mid;
+    else hi = mid - 1;
+  }
+  return text.slice(0, lo);
+}
+
 // --- Capture Filtering ---
 
 const MEMORY_TRIGGERS = [
@@ -87,14 +105,19 @@ export function shouldCapture(
 interface QueuedTurn {
   role: string;
   content: string;
+  /** Delivery attempts so far — poison messages are evicted after MAX_ATTEMPTS. */
+  attempts: number;
 }
+
+/** Attempts before a persistently-failing message is dropped (poison eviction). */
+export const WRITE_MAX_ATTEMPTS = 5;
 
 export class WriteQueue {
   private client: OVClient;
   private sessionId: string;
   private queue: QueuedTurn[] = [];
   private flushTimer: ReturnType<typeof setInterval> | null = null;
-  private flushing = false;
+  private inflight: Promise<boolean> | null = null;
   private intervalMs: number;
   private threshold: number;
 
@@ -115,29 +138,58 @@ export class WriteQueue {
   }
 
   enqueue(role: string, content: string): void {
-    this.queue.push({ role, content });
+    this.queue.push({ role, content, attempts: 0 });
     if (this.queue.length >= this.threshold) {
-      this.flush(); // fire-and-forget
+      void this.flush(); // fire-and-forget
     }
   }
 
-  async flush(): Promise<void> {
-    if (this.flushing || this.queue.length === 0) return;
-    this.flushing = true;
+  /**
+   * Flush the queue. A BARRIER for callers: if another flush is in flight it
+   * is awaited first, then any remainder is flushed too, so a resolved `true`
+   * means "every message enqueued before this call has been delivered".
+   * Returns false when messages remain undelivered (delivery failure).
+   *
+   * Commit callers depend on this contract — committing while turns are still
+   * queued would archive an incomplete session yet advance the takeover
+   * boundary past the missing turns.
+   */
+  async flush(): Promise<boolean> {
+    // Wait for an in-flight flush instead of returning early — the early
+    // return made commit-before-delivery races possible.
+    while (this.inflight) await this.inflight;
+    if (this.queue.length === 0) return true;
 
+    this.inflight = this.flushBatch();
+    try {
+      const ok = await this.inflight;
+      // A timer flush may have started while we ran; drained means empty.
+      return ok && this.queue.length === 0;
+    } finally {
+      this.inflight = null;
+    }
+  }
+
+  private async flushBatch(): Promise<boolean> {
     const batch = this.queue.splice(0);
     for (let i = 0; i < batch.length; i++) {
       const turn = batch[i];
+      turn.attempts++;
       const ok = await this.client.addMessage(
         this.sessionId, turn.role, turn.content,
       );
       if (!ok) {
-        // Re-queue failed turn + remaining unprocessed turns at front for retry
-        this.queue.unshift(...batch.slice(i));
-        break;
+        // Evict poison messages that keep failing; re-queue the rest.
+        const retry = batch.slice(i).filter(t => t.attempts < WRITE_MAX_ATTEMPTS);
+        this.queue.unshift(...retry);
+        return false;
       }
     }
-    this.flushing = false;
+    return true;
+  }
+
+  get pendingCount(): number {
+    return this.queue.length;
   }
 
   cancelPending(): void {

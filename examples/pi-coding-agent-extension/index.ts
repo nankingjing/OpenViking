@@ -183,21 +183,23 @@ export default async function (pi: ExtensionAPI) {
 
     const msgs = (event.messages ?? []) as any[];
 
-    // User text: first user message of this run
-    let userText = "";
+    // User text: ALL user messages of this run (prompt + steering/follow-up
+    // messages injected mid-run). In faithful/takeover mode dropping steering
+    // input would silently lose it from the archive overview.
+    const userTexts: string[] = [];
     for (const m of msgs) {
-      if (m?.role === "user") {
-        userText = typeof m.content === "string"
+      if (m?.role !== "user") continue;
+      const text = typeof m.content === "string"
+        ? m.content
+        : Array.isArray(m.content)
           ? m.content
-          : Array.isArray(m.content)
-            ? m.content
-                .filter((b: any) => b.type === "text")
-                .map((b: any) => b.text)
-                .join("")
-            : "";
-        break;
-      }
+              .filter((b: any) => b.type === "text")
+              .map((b: any) => b.text)
+              .join("")
+          : "";
+      if (text.trim()) userTexts.push(text);
     }
+    const userText = userTexts.join("\n\n");
 
     // Assistant text + tool lines across all assistant rounds of the run
     let assistantText = "";
@@ -305,7 +307,10 @@ export default async function (pi: ExtensionAPI) {
           await indexBuilder.buildIndex();
           ctx.ui.notify("OpenViking: committed successfully", "info");
         } else {
-          ctx.ui.notify("OpenViking: commit failed (or overview pending)", "error");
+          ctx.ui.notify(
+            "OpenViking: boundary not advanced (commit failed, busy, or overview still extracting — retry shortly)",
+            "error",
+          );
         }
         return;
       }

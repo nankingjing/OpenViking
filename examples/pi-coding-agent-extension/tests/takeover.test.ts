@@ -578,6 +578,46 @@ describe("TakeoverManager.onTurnSynced + commitAndAdvance", () => {
     );
   });
 
+  it("shutdown persists once — identical state does not append redundant entries", async () => {
+    const mgr = makeManager(baseConfig({
+      takeoverTokenThreshold: 50,
+      takeoverKeepRecentTurns: 1,
+    }));
+    mgr.transformContext([
+      userMsg("t1"), assistantMsg("a1"),
+      userMsg("t2"), assistantMsg("a2"),
+      userMsg("t3"),
+    ]);
+    await mgr.onTurnSynced(200); // commits + persists once
+    const callsAfterCommit = appendEntry.mock.calls.length;
+    await mgr.shutdown(); // state unchanged → no new entry
+    await mgr.shutdown();
+    expect(appendEntry.mock.calls.length).toBe(callsAfterCommit);
+  });
+
+  it("persisted overview is capped to the overview budget (CJK-safe)", async () => {
+    const hugeCjk = "あ".repeat(9000); // ~13.5k est. tokens
+    fakeClient.getSessionContext = vi.fn().mockResolvedValue({
+      latest_archive_overview: hugeCjk,
+      messages: [],
+    });
+    const mgr = makeManager(baseConfig({
+      takeoverTokenThreshold: 50,
+      takeoverKeepRecentTurns: 1,
+      takeoverOverviewBudget: 1000,
+    }));
+    mgr.transformContext([
+      userMsg("t1"), assistantMsg("a1"),
+      userMsg("t2"), assistantMsg("a2"),
+      userMsg("t3"),
+    ]);
+    await mgr.onTurnSynced(200);
+    const entry = appendEntry.mock.calls.find((c: any[]) => c[0] === TAKEOVER_ENTRY_TYPE)?.[1];
+    expect(entry).toBeDefined();
+    // 1000-token budget ≈ 666 CJK chars, nowhere near the raw 9000
+    expect(entry.overview.length).toBeLessThan(1000);
+  });
+
   it("commit returns null → boundary unchanged, pendingTokens retained", async () => {
     fakeSync.commit = vi.fn().mockResolvedValue(null);
     const mgr = makeManager(baseConfig({

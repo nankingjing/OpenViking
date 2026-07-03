@@ -295,6 +295,35 @@ describe("index.ts — session flow", () => {
     expect(ovState.sessionCreated).toBe(true);
   });
 
+  it("agent_end captures ALL user messages of the run (steering included)", async () => {
+    await fireEvent(fakePi, "session_start", {}, ctx);
+
+    await fireEvent(fakePi, "agent_end", {
+      messages: [
+        { role: "user", content: "primary prompt with enough length to capture", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "working on it" }], timestamp: 2 },
+        { role: "user", content: "steering: actually also rename the flag please", timestamp: 3 },
+        { role: "assistant", content: [{ type: "text", text: "done with both" }], timestamp: 4 },
+      ],
+    }, ctx);
+    // Two more runs so the write queue crosses its flush threshold (5 items)
+    for (let i = 0; i < 2; i++) {
+      await fireEvent(fakePi, "agent_end", {
+        messages: [
+          { role: "user", content: `filler run number ${i} long enough to capture`, timestamp: 10 + i },
+          { role: "assistant", content: [{ type: "text", text: "ack" }], timestamp: 20 + i },
+        ],
+      }, ctx);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+
+    const userMsgs = ovState.messages.filter((m) => m.role === "user");
+    expect(userMsgs.length).toBeGreaterThan(0);
+    const combined = userMsgs.map((m) => m.content).join("\n");
+    expect(combined).toContain("primary prompt with enough length to capture");
+    expect(combined).toContain("steering: actually also rename the flag please");
+  });
+
   it("start() is idempotent — session created only once across both hooks", async () => {
     await fireEvent(fakePi, "session_start", {}, ctx);
     expect(ovState.sessionCreated).toBe(true);

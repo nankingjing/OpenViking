@@ -18,7 +18,7 @@
 import type { OVClient } from "./client.js";
 import type { OVConfig } from "./config.js";
 import type { SyncManager } from "./sync.js";
-import { estimateTokens } from "./sync.js";
+import { truncateToTokens } from "./sync.js";
 
 export const TAKEOVER_ENTRY_TYPE = "ov-takeover";
 export const OVERVIEW_MARKER = "[OpenViking Session Context]";
@@ -248,29 +248,35 @@ export class TakeoverManager {
   > {
     if (!this.enabled) return undefined;
     if (!preparation.firstKeptEntryId) return undefined; // nothing tool-safe to cut at
+    if (this.committing) return undefined; // commit in flight — fail open, rare
 
-    await this.sync.flushQueue();
-    const archiveUri = await this.sync.commit(false);
-    if (!archiveUri) return undefined; // fail-open: pi's compaction proceeds
+    this.committing = true;
+    try {
+      await this.sync.flushQueue();
+      const archiveUri = await this.sync.commit(false);
+      if (!archiveUri) return undefined; // fail-open: pi's compaction proceeds
 
-    const overview = await this.pollOverview();
-    if (!overview) return undefined;
+      const overview = await this.pollOverview();
+      if (!overview) return undefined;
 
-    // Pi's CompactionEntry now covers the pre-cut span — our own boundary
-    // must reset, otherwise we'd double-drop.
-    this.overview = overview;
-    this.resetBoundary("pi compaction absorbed boundary");
-    this.pendingTokens = 0;
-    this.persist();
+      // Pi's CompactionEntry now covers the pre-cut span — our own boundary
+      // must reset, otherwise we'd double-drop.
+      this.overview = overview;
+      this.resetBoundary("pi compaction absorbed boundary");
+      this.pendingTokens = 0;
+      this.persist();
 
-    return {
-      compaction: {
-        summary: `${OVERVIEW_MARKER}\n${this.truncatedOverview()}`,
-        firstKeptEntryId: preparation.firstKeptEntryId!,
-        tokensBefore: preparation.tokensBefore,
-        details: { source: "openviking" },
-      },
-    };
+      return {
+        compaction: {
+          summary: `${OVERVIEW_MARKER}\n${this.truncatedOverview()}`,
+          firstKeptEntryId: preparation.firstKeptEntryId!,
+          tokensBefore: preparation.tokensBefore,
+          details: { source: "openviking" },
+        },
+      };
+    } finally {
+      this.committing = false;
+    }
   }
 
   /** Final flush + state persist (session_shutdown). */
@@ -291,17 +297,25 @@ export class TakeoverManager {
 
   private truncatedOverview(): string {
     const budget = this.config.takeoverOverviewBudget;
-    if (estimateTokens(this.overview) <= budget) return this.overview;
-    return this.overview.slice(0, budget * 3) + "\n…(truncated)";
+    const truncated = truncateToTokens(this.overview, budget);
+    return truncated === this.overview ? this.overview : truncated + "\n…(truncated)";
   }
+
+  private lastPersisted = "";
 
   private persist(): void {
     try {
-      this.appendEntry(TAKEOVER_ENTRY_TYPE, {
+      const state: TakeoverPersistedState = {
         coveredUserTurns: this.coveredUserTurns,
-        overview: this.overview,
+        // Only the injected (budget-bounded) form is ever needed again —
+        // don't grow the session file with unbounded raw overviews.
+        overview: truncateToTokens(this.overview, this.config.takeoverOverviewBudget),
         pendingTokens: this.pendingTokens,
-      } satisfies TakeoverPersistedState);
+      };
+      const key = JSON.stringify(state);
+      if (key === this.lastPersisted) return; // no redundant entries per shutdown
+      this.appendEntry(TAKEOVER_ENTRY_TYPE, state);
+      this.lastPersisted = key;
     } catch {
       // Best effort — resume simply starts with full history.
     }

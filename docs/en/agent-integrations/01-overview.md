@@ -9,6 +9,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **Claude Code** | [Claude Code Memory Plugin](./02-claude-code.md) — auto-recall + auto-capture via hooks |
 | **OpenClaw** | [OpenClaw Plugin](./03-openclaw.md) — context-engine with full lifecycle integration |
 | **Codex** | [Codex Memory Plugin](./04-codex.md) — lifecycle hooks for auto-recall and incremental capture |
+| **Pi coding agent** | [Pi Coding Agent Extension](./10-pi-coding-agent.md) — native TypeScript extension with auto-recall, auto-capture, and context takeover |
 | **Hermes Agent** | [Hermes Agent](./05-hermes.md) — built-in OpenViking memory provider, no plugin install needed |
 | **LangChain / LangGraph** | [LangChain and LangGraph](./07-langchain-langgraph.md) — retriever, tools, context backend, store, and middleware |
 | **Cursor / Trae / Manus / Claude Desktop / ChatGPT / …** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
@@ -19,7 +20,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 Some integrations go beyond what a generic MCP client can do:
 
 - **Generic MCP clients** call OpenViking on demand through tools the model decides to invoke. Setup is one config snippet.
-- **Hooks-based / native plugins** (Claude Code, Codex, OpenClaw, Hermes Agent, AstrBot) drive recall and capture from runtime lifecycle events — every prompt, every turn, session start/end, compact, subagent spawn. The model doesn't need to "remember to recall."
+- **Hooks-based / native plugins** (Claude Code, Codex, Pi, OpenClaw, Hermes Agent, AstrBot) drive recall and capture from runtime lifecycle events — every prompt, every turn, session start/end, compact, subagent spawn. The model doesn't need to "remember to recall." Pi also supports context takeover: committed history is replaced in the model's view by OpenViking's archive overview plus recent live turns.
 - **SDK integrations** (LangChain/LangGraph) wire OpenViking into framework-native abstractions such as retrievers, tools, chat history, stores, and middleware.
 
 For agents whose runtime exposes hooks, middleware, or a context-engine slot, the native integration path is usually the better default.

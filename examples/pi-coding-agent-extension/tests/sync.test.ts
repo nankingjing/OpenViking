@@ -5,6 +5,7 @@ import {
   stripInjectedBlocks,
   shouldCapture,
   estimateTokens,
+  truncateToTokens,
 } from "../sync.js";
 import type { OVConfig } from "../config.js";
 
@@ -192,6 +193,31 @@ describe("estimateTokens", () => {
     // 2 CJK (3.0) + 8 ASCII (2.0) = 5.0 → ceil = 5
     const mixed = "ああ" + "a".repeat(8);
     expect(estimateTokens(mixed)).toBe(5);
+  });
+});
+
+describe("truncateToTokens", () => {
+  it("returns text unchanged when within budget", () => {
+    expect(truncateToTokens("hello world", 100)).toBe("hello world");
+  });
+
+  it("truncates ASCII to the budget", () => {
+    const text = "a".repeat(4000); // ~1000 tokens
+    const out = truncateToTokens(text, 100);
+    expect(estimateTokens(out)).toBeLessThanOrEqual(100);
+    expect(out.length).toBeGreaterThan(0);
+  });
+
+  it("respects the budget on CJK text (chars-based slicing would overshoot ~4.5x)", () => {
+    const text = "あ".repeat(9000); // ~13500 est. tokens
+    const out = truncateToTokens(text, 3000);
+    expect(estimateTokens(out)).toBeLessThanOrEqual(3000);
+    // budget*3 char slicing would have kept 9000 chars — we must keep ~2000
+    expect(out.length).toBeLessThan(2500);
+  });
+
+  it("returns empty string for zero budget", () => {
+    expect(truncateToTokens("something", 0)).toBe("");
   });
 });
 
