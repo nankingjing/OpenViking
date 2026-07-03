@@ -1027,6 +1027,37 @@ class AsyncHTTPClient(BaseClient):
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
 
+    async def search_resolution(
+        self,
+        query: str,
+        agent_space: str = "default",
+        user_ids: Optional[List[str]] = None,
+        peer_ids: Optional[List[str]] = None,
+        session_id: Optional[str] = None,
+        session_context: Optional[List[Dict[str, Any]]] = None,
+        include_debug: bool = False,
+        limits: Optional[Dict[str, int]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Resolve a query into a temporary Query Resolution Pack."""
+        telemetry = self._validate_telemetry(telemetry)
+        payload = {
+            "query": query,
+            "agent_space": agent_space,
+            "user_ids": user_ids or [],
+            "peer_ids": peer_ids or [],
+            "session_id": session_id,
+            "session_context": session_context or [],
+            "include_debug": include_debug,
+            "limits": limits or {},
+            "options": options or {},
+            "telemetry": telemetry,
+        }
+        response = await self._http.post("/api/v1/search/resolution", json=payload)
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result") or {}, response_data)
+
     async def grep(
         self,
         uri: str,

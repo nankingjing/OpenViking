@@ -93,6 +93,77 @@ async def test_search_resolution_service_builds_pack(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_resolution_pack_omits_query_abstracts_and_memory_fields(monkeypatch):
+    class FakeMemoryFieldsVikingFS:
+        async def read(self, uri, ctx=None):
+            if "experiences" in uri:
+                return (
+                    "## Approach\n"
+                    "- Reuse the validated workflow.\n\n"
+                    '<!-- MEMORY_FIELDS {"memory_type": "experiences", "links": []} -->'
+                )
+            return (
+                "# User Memory\n"
+                "Remember the concrete task constraint.\n\n"
+                '<!-- MEMORY_FIELDS {"memory_type": "events", "event_name": "task"} -->'
+            )
+
+    service = SearchService(FakeMemoryFieldsVikingFS())
+    ctx = SimpleNamespace(user=SimpleNamespace(user_id="test_user"))
+
+    async def fake_find(*, query, ctx, target_uri="", limit=10, **kwargs):
+        targets = target_uri if isinstance(target_uri, list) else [target_uri]
+        joined_targets = "\n".join(str(uri) for uri in targets)
+        if "trajectories" in joined_targets:
+            return {"memories": []}
+        if "experiences" in joined_targets:
+            return {
+                "memories": [
+                    {
+                        "uri": "viking://agent/default/memories/experiences/workflow.md",
+                        "score": 0.9,
+                        "abstract": "do not render this experience abstract",
+                    }
+                ]
+            }
+        if "/memories" in joined_targets:
+            return {
+                "memories": [
+                    {
+                        "uri": "viking://user/test_user/peers/peer/memories/events/task.md",
+                        "score": 0.8,
+                        "abstract": "do not render this user memory abstract",
+                    }
+                ]
+            }
+        return {"memories": []}
+
+    async def fake_complete_json(*, node, prompt, llm_debug):
+        llm_debug[node] = {"llm_used": False, "fallback_reason": "test"}
+        return None
+
+    monkeypatch.setattr(service, "find", fake_find)
+    monkeypatch.setattr(service, "_complete_resolution_json", fake_complete_json)
+
+    result = await service.resolve(
+        query="resolve a benchmark task",
+        ctx=ctx,
+        agent_space="default",
+        peer_ids=["peer"],
+    )
+
+    pack = result["pack_markdown"]
+    assert "## Original Query" not in pack
+    assert "do not render this user memory abstract" not in pack
+    assert "do not render this experience abstract" not in pack
+    assert "<!-- MEMORY_FIELDS" not in pack
+    assert "memory_type" not in pack
+    assert "Remember the concrete task constraint." in pack
+    assert "- Reuse the validated workflow." in pack
+    assert "  content: |" in pack
+
+
+@pytest.mark.asyncio
 async def test_search_resolution_service_uses_llm_plan_guided_path(monkeypatch):
     service = SearchService(FakeVikingFS())
     ctx = SimpleNamespace(user=SimpleNamespace(user_id="test_user"))
@@ -157,9 +228,7 @@ async def test_search_resolution_service_uses_llm_plan_guided_path(monkeypatch):
         if node == "retrieval_query_build":
             return {
                 "retrieval_queries": {
-                    "experiences": [
-                        {"from": "p1", "query": "plan-guided retrieval experience"}
-                    ],
+                    "experiences": [{"from": "p1", "query": "plan-guided retrieval experience"}],
                     "skills": [{"from": "p1", "query": "plan-step skill retrieval"}],
                 }
             }

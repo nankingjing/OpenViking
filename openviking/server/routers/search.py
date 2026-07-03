@@ -200,6 +200,7 @@ class SearchResolutionRequest(BaseModel):
     query: str
     agent_space: str = "default"
     user_ids: List[str] = Field(default_factory=list)
+    peer_ids: List[str] = Field(default_factory=list)
     session_id: Optional[str] = None
     session_context: List[Dict[str, Any]] = Field(default_factory=list)
     include_debug: bool = False
@@ -321,6 +322,7 @@ async def resolution(
             ctx=_ctx,
             agent_space=request.agent_space,
             user_ids=request.user_ids,
+            peer_ids=request.peer_ids,
             session_context=session_context,
             include_debug=request.include_debug,
             limits=request.limits.model_dump(),

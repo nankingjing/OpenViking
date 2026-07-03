@@ -8,9 +8,11 @@ Provides semantic search operations: search, find, and query-time resolution pac
 import asyncio
 import hashlib
 import json
+import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.peer_id import normalize_peer_id
 from openviking.core.uri_validation import validate_optional_viking_uris
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
@@ -58,6 +60,20 @@ def _compact_resolution_text(text: Any, limit: int = 2000) -> str:
     if len(compact) <= limit:
         return compact
     return compact[:limit].rstrip() + "..."
+
+
+_MEMORY_FIELDS_COMMENT_RE = re.compile(r"\n*\s*<!--\s*MEMORY_FIELDS\s*[\s\S]*?-->\s*", re.MULTILINE)
+
+
+def _visible_resolution_content(text: Any) -> str:
+    """Return memory content safe to expose in query-resolution packs."""
+    if not text:
+        return ""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    elif not isinstance(text, str):
+        text = str(text)
+    return _MEMORY_FIELDS_COMMENT_RE.sub("", text).strip()
 
 
 def _message_text_for_resolution(message: Dict[str, Any]) -> str:
@@ -234,6 +250,7 @@ class SearchService:
         ctx: RequestContext,
         agent_space: str = "default",
         user_ids: Optional[List[str]] = None,
+        peer_ids: Optional[List[str]] = None,
         session_context: Optional[List[Dict[str, Any]]] = None,
         include_debug: bool = False,
         limits: Optional[Dict[str, int]] = None,
@@ -255,6 +272,7 @@ class SearchService:
         return_markdown = bool(options.get("return_markdown", True))
         return_structured = bool(options.get("return_structured", True))
         user_ids = user_ids or [ctx.user.user_id]
+        peer_ids = self._normalize_peer_ids(peer_ids)
         agent_space = (agent_space or "default").strip() or "default"
         step_debug: Dict[str, Any] = {}
         llm_debug: Dict[str, Any] = {}
@@ -287,6 +305,7 @@ class SearchService:
                 "intent": intent,
                 "session_context_items": len(session_context or []),
                 "user_ids": user_ids,
+                "peer_ids": peer_ids,
                 "agent_space": agent_space,
             },
         )
@@ -323,6 +342,7 @@ class SearchService:
             ctx=ctx,
             agent_space=agent_space,
             user_ids=user_ids,
+            peer_ids=peer_ids,
             limits=limits,
             retrieval_queries=retrieval_queries,
         )
@@ -482,6 +502,20 @@ class SearchService:
             }
         return result
 
+    def _normalize_peer_ids(self, peer_ids: Optional[List[str]]) -> List[str]:
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for raw_peer_id in peer_ids or []:
+            try:
+                peer_id = normalize_peer_id(raw_peer_id)
+            except ValueError:
+                continue
+            if not peer_id or peer_id in seen:
+                continue
+            seen.add(peer_id)
+            normalized.append(peer_id)
+        return normalized
+
     def _selected_counts(self, selected_context: Dict[str, List[Dict[str, Any]]]) -> Dict[str, int]:
         return {source: len(items) for source, items in selected_context.items()}
 
@@ -626,9 +660,7 @@ class SearchService:
             {
                 "query": query,
                 "intent_json": json.dumps(intent, ensure_ascii=False),
-                "initial_pseudo_plan_json": json.dumps(
-                    initial_pseudo_plan, ensure_ascii=False
-                ),
+                "initial_pseudo_plan_json": json.dumps(initial_pseudo_plan, ensure_ascii=False),
             },
         )
         parsed = await self._complete_resolution_json(
@@ -647,10 +679,19 @@ class SearchService:
                 normalized[source] = fallback_queries
         return normalized
 
-
     def _analyze_intent(self, query: str) -> Dict[str, Any]:
         lower = query.lower()
-        write_terms = ("write", "edit", "create", "delete", "commit", "实现", "修改", "新增", "删除")
+        write_terms = (
+            "write",
+            "edit",
+            "create",
+            "delete",
+            "commit",
+            "实现",
+            "修改",
+            "新增",
+            "删除",
+        )
         tool_terms = ("file", "代码", "repo", "文档", "实现", "api", "接口", "检索", "search")
         design_terms = ("方案", "设计", "架构", "design", "architecture", "proposal")
         likely_tools: List[str] = ["openviking_search"]
@@ -704,9 +745,13 @@ class SearchService:
             "Return a compact guidance pack for the current query only.",
         ]
         if intent["task_type"] == "design_synthesis":
-            steps.insert(1, "Break the design task into reusable concepts and implementation boundaries.")
+            steps.insert(
+                1, "Break the design task into reusable concepts and implementation boundaries."
+            )
         if session_context:
-            steps.insert(1, "Use recent session context only when it changes the query interpretation.")
+            steps.insert(
+                1, "Use recent session context only when it changes the query interpretation."
+            )
         return [
             {
                 "step": step,
@@ -725,8 +770,13 @@ class SearchService:
         base = f"{query}\ntask_type: {intent['task_type']}\ndomain: {intent['domain']}"
         return {
             "user_memory": [query, f"{base}\nuser preferences constraints entities events"],
-            "experiences": [base, f"{query}\n{plan_text}\nreusable experience approach anti-pattern"],
-            "tools_memory": [f"{base}\n{' '.join(intent.get('likely_tools', []))} tool guidance failures"],
+            "experiences": [
+                base,
+                f"{query}\n{plan_text}\nreusable experience approach anti-pattern",
+            ],
+            "tools_memory": [
+                f"{base}\n{' '.join(intent.get('likely_tools', []))} tool guidance failures"
+            ],
             "skills": [base, f"{query}\n{plan_text}\nSKILL.md task workflow"],
             "skills_memory": [f"{base}\nskill usage recommendation failures"],
         }
@@ -737,17 +787,39 @@ class SearchService:
         ctx: RequestContext,
         agent_space: str,
         user_ids: List[str],
+        peer_ids: List[str],
         limits: Dict[str, int],
         retrieval_queries: Dict[str, List[str]],
     ) -> tuple[Dict[str, List[Dict[str, Any]]], Dict[str, str]]:
         agent_root = f"viking://agent/{agent_space}"
+        user_memory_targets: List[str] = []
+        if peer_ids:
+            for user_id in user_ids:
+                for peer_id in peer_ids:
+                    user_memory_targets.append(f"viking://user/{user_id}/peers/{peer_id}/memories")
+        else:
+            for user_id in user_ids:
+                user_memory_targets.append(f"viking://user/{user_id}/memories")
         targets = {
-            "user_memory": [f"viking://user/{user_id}/memories" for user_id in user_ids]
-            or ["viking://user/memories"],
-            "experiences": [f"{agent_root}/memories/experiences"],
-            "tools_memory": [f"{agent_root}/memories/tools"],
+            "user_memory": user_memory_targets or ["viking://user/memories"],
+            # Agent execution memories can be stored in either the agent namespace
+            # or the current user's self memory namespace, depending on the
+            # importer/client path that created them. Search both so query
+            # resolution can reuse previously committed trajectories and
+            # experiences without requiring a migration.
+            "experiences": [
+                f"{agent_root}/memories/experiences",
+                "viking://user/memories/experiences",
+            ],
+            "tools_memory": [
+                f"{agent_root}/memories/tools",
+                "viking://user/memories/tools",
+            ],
             "skills": [f"{agent_root}/skills", "viking://agent/skills"],
-            "skills_memory": [f"{agent_root}/memories/skills"],
+            "skills_memory": [
+                f"{agent_root}/memories/skills",
+                "viking://user/memories/skills",
+            ],
         }
 
         async def run_one(source: str) -> tuple[str, List[Dict[str, Any]], str | None]:
@@ -825,7 +897,9 @@ class SearchService:
         tasks = []
         for source, items in raw_candidates.items():
             for idx, item in enumerate(items):
-                tasks.append(self._materialize_candidate(viking_fs, ctx, source, item, idx, options))
+                tasks.append(
+                    self._materialize_candidate(viking_fs, ctx, source, item, idx, options)
+                )
         materialized = await asyncio.gather(*tasks, return_exceptions=True)
 
         per_source_counts: Dict[str, int] = {}
@@ -890,11 +964,7 @@ class SearchService:
                 content = await viking_fs.read(uri, ctx=ctx)
             except Exception:
                 content = ""
-        content = _compact_resolution_text(content, 5000)
-        if content_mode == "summary":
-            content = self._truncate(content, 1800)
-        elif content_mode == "full":
-            content = self._truncate(content, 5000)
+        content = _visible_resolution_content(content)
         abstract = _compact_resolution_text(
             item.get("abstract") or item.get("description") or "", 1800
         )
@@ -919,7 +989,9 @@ class SearchService:
         idx: int,
         options: Dict[str, Any],
     ) -> str:
-        configured = options.get("skill_content_mode") if source in {"skills", "skills_memory"} else None
+        configured = (
+            options.get("skill_content_mode") if source in {"skills", "skills_memory"} else None
+        )
         if configured in {"full", "summary", "link_only"}:
             return configured
         if source == "skills":
@@ -1039,7 +1111,10 @@ class SearchService:
                 result = await self.find(
                     query=grounding_query,
                     ctx=ctx,
-                    target_uri=f"viking://agent/{agent_space}/memories/trajectories",
+                    target_uri=[
+                        f"viking://agent/{agent_space}/memories/trajectories",
+                        "viking://user/memories/trajectories",
+                    ],
                     limit=limits.get("trajectory_grounding", 2),
                 )
             except Exception:
@@ -1065,7 +1140,9 @@ class SearchService:
                     "source": "trajectory_grounding",
                     "uri": uri,
                     "score": self._score(item),
-                    "summary": self._truncate(content or item.get("abstract", ""), 1200),
+                    "summary": self._truncate(
+                        _visible_resolution_content(content) or item.get("abstract", ""), 1200
+                    ),
                     "content_mode": "summary" if content else "link_only",
                 }
             )
@@ -1084,12 +1161,16 @@ class SearchService:
         if selected_context.get("agent_experiences"):
             outline.append("Apply the selected agent experiences as reusable execution guidance.")
         if selected_context.get("skills"):
-            outline.append("Use the selected skills or SKILL.md summaries for task-specific workflow guidance.")
+            outline.append(
+                "Use the selected skills or SKILL.md summaries for task-specific workflow guidance."
+            )
         if selected_context.get("tool_guidance"):
             outline.append("Respect the selected tool guidance and known failure notes.")
         if selected_context.get("trajectory_grounding"):
             outline.append("Use trajectory grounding only as evidence, not as a script to replay.")
-        outline.append("Produce the final answer or execution plan in the same language as the query.")
+        outline.append(
+            "Produce the final answer or execution plan in the same language as the query."
+        )
         return outline
 
     async def _build_revised_execution_outline_with_llm(
@@ -1155,7 +1236,6 @@ class SearchService:
     ) -> str:
         sections = [
             "# Query Resolution Pack",
-            f"## Original Query\n{query}",
             "## Intent\n"
             + "\n".join(
                 [
@@ -1166,9 +1246,17 @@ class SearchService:
                 ]
             ),
         ]
-        self._append_context_section(sections, "Relevant User Memory", selected_context["user_memory"])
         self._append_context_section(
-            sections, "Relevant Agent Experiences", selected_context["agent_experiences"]
+            sections,
+            "Relevant User Memory",
+            selected_context["user_memory"],
+            include_abstract=False,
+        )
+        self._append_context_section(
+            sections,
+            "Relevant Agent Experiences",
+            selected_context["agent_experiences"],
+            include_abstract=False,
         )
         self._append_context_section(sections, "Relevant Skills", selected_context["skills"])
         self._append_context_section(sections, "Tool Guidance", selected_context["tool_guidance"])
@@ -1193,7 +1281,12 @@ class SearchService:
         return self._truncate("\n\n".join(sections), max_chars)
 
     def _append_context_section(
-        self, sections: List[str], title: str, items: List[Dict[str, Any]]
+        self,
+        sections: List[str],
+        title: str,
+        items: List[Dict[str, Any]],
+        *,
+        include_abstract: bool = True,
     ) -> None:
         if not items:
             sections.append(f"## {title}\n- No high-confidence item selected.")
@@ -1201,10 +1294,11 @@ class SearchService:
         lines = []
         for item in items:
             lines.append(f"- uri: {item.get('uri', '')}")
-            if item.get("abstract"):
+            if include_abstract and item.get("abstract"):
                 lines.append(f"  abstract: {self._one_line(item['abstract'])}")
             if item.get("content"):
-                lines.append(f"  content: {self._one_line(item['content'])}")
+                lines.append("  content: |")
+                lines.extend(f"    {line}" for line in str(item["content"]).splitlines())
         sections.append(f"## {title}\n" + "\n".join(lines))
 
     def _append_grounding_section(
@@ -1222,9 +1316,13 @@ class SearchService:
     def _one_line(self, text: str) -> str:
         return " ".join(str(text).split())
 
-    def _truncate(self, text: str, max_chars: int) -> str:
+    def _truncate(self, text: Any, max_chars: int) -> str:
         if not text:
             return ""
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", errors="replace")
+        elif not isinstance(text, str):
+            text = str(text)
         if len(text) <= max_chars:
             return text
         return text[: max_chars - 16].rstrip() + "\n...[truncated]"

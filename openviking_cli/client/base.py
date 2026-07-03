@@ -197,6 +197,23 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
+    async def search_resolution(
+        self,
+        query: str,
+        agent_space: str = "default",
+        user_ids: Optional[List[str]] = None,
+        peer_ids: Optional[List[str]] = None,
+        session_id: Optional[str] = None,
+        session_context: Optional[List[Dict[str, Any]]] = None,
+        include_debug: bool = False,
+        limits: Optional[Dict[str, int]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Any:
+        """Resolve a query into a temporary Query Resolution Pack."""
+        ...
+
+    @abstractmethod
     async def grep(
         self,
         uri: str,

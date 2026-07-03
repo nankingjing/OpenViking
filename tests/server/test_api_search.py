@@ -318,6 +318,7 @@ async def test_search_resolution_endpoint_passes_request(
             "query": "sample",
             "agent_space": "default",
             "user_ids": ["user_1"],
+            "peer_ids": ["peer_1"],
             "session_context": [{"role": "user", "content": "previous"}],
             "include_debug": True,
             "limits": {"experiences": 2},
@@ -332,6 +333,7 @@ async def test_search_resolution_endpoint_passes_request(
     assert captured["query"] == "sample"
     assert captured["agent_space"] == "default"
     assert captured["user_ids"] == ["user_1"]
+    assert captured["peer_ids"] == ["peer_1"]
     assert captured["session_context"] == [{"role": "user", "content": "previous"}]
     assert captured["include_debug"] is True
     assert captured["limits"]["experiences"] == 2
