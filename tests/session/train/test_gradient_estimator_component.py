@@ -82,8 +82,29 @@ def _context() -> ExperienceGradientContext:
 
 
 @pytest.mark.asyncio
-async def test_experience_gradient_estimator_converts_experience_operations():
+async def test_experience_gradient_estimator_skips_success_trajectories():
     analysis = _analysis(passed=True, outcome="success")
+    operations = SimpleNamespace(
+        upsert_operations=[
+            SimpleNamespace(
+                memory_type="experiences",
+                memory_fields={"content": "should not be used"},
+                uris=["viking://user/u/memories/experiences/unused.md"],
+                old_memory_file_content=None,
+            )
+        ]
+    )
+    estimator = FakeExperienceGradientEstimator({analysis.trajectories[0].uri: operations})
+
+    gradients = await estimator.estimate(analysis, _experience_set(), _context())
+
+    assert gradients == []
+    assert estimator.calls == []
+
+
+@pytest.mark.asyncio
+async def test_experience_gradient_estimator_converts_experience_operations():
+    analysis = _analysis(passed=False, outcome="failure")
     old_file = MemoryFile(
         uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
         content="old body with [[links]]",
@@ -131,9 +152,9 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.links[0].link_type == "derived_from"
     assert gradient.links[0].match_text is None
     assert gradient.links[0].description == ""
-    assert gradient.confidence == pytest.approx(0.9)
-    assert gradient.metadata["trajectory_outcome"] == "success"
-    assert gradient.metadata["rubric_passed"] is True
+    assert gradient.confidence == pytest.approx(0.3)
+    assert gradient.metadata["trajectory_outcome"] == "failure"
+    assert gradient.metadata["rubric_passed"] is False
     assert gradient.metadata["training_category"] == "booking"
     assert len(estimator.calls) == 1
 
@@ -166,13 +187,13 @@ async def test_experience_gradient_estimator_uses_policy_version_for_newer_old_f
 
 @pytest.mark.asyncio
 async def test_experience_gradient_estimator_runs_trajectory_extracts_in_parallel():
-    analysis = _analysis()
+    analysis = _analysis(passed=False, outcome="failure")
     analysis.trajectories.append(
         Trajectory(
             name="booking_duplicate_second",
             uri="viking://user/u/memories/trajectories/booking_duplicate_second.md",
             content="second trajectory content",
-            outcome="success",
+            outcome="failure",
             retrieval_anchor="Stage: final",
         )
     )
@@ -203,7 +224,7 @@ async def test_experience_gradient_estimator_runs_trajectory_extracts_in_paralle
 
 @pytest.mark.asyncio
 async def test_experience_gradient_estimator_skips_empty_content_and_handles_extract_errors():
-    analysis = _analysis()
+    analysis = _analysis(passed=False, outcome="failure")
     estimator = FakeExperienceGradientEstimator({})
 
     async def raise_error(_trajectory, _context):
@@ -224,7 +245,7 @@ async def test_experience_gradient_estimator_skips_empty_content_and_handles_ext
 
 @pytest.mark.asyncio
 async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
-    analysis = _analysis()
+    analysis = _analysis(passed=False, outcome="failure")
     captured = {}
 
     class FakeProvider:
@@ -251,9 +272,7 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
     monkeypatch.setattr(gradient_estimator_module, "MemoryIsolationHandler", FakeIsolationHandler)
     monkeypatch.setattr(gradient_estimator_module, "ExtractLoop", FakeExtractLoop)
 
-    estimator = ExperienceGradientEstimator(
-        viking_fs=SimpleNamespace(), vlm=SimpleNamespace()
-    )
+    estimator = ExperienceGradientEstimator(viking_fs=SimpleNamespace(), vlm=SimpleNamespace())
     context = _context()
 
     gradients = await estimator.estimate(analysis, _experience_set(), context)

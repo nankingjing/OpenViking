@@ -1,9 +1,14 @@
 memory_type: trajectories
 description: |
-  A compact, reusable operation contract distilled from an agent task trajectory.
+  A compact execution-audit record distilled from an agent task trajectory.
 
-  Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
-  Skip pure chitchat or simple Q&A with no execution trace.
+  The trajectory memory is not a success workflow or an experience instruction. It records what
+  actually happened, what the task/evaluation required, where the first material divergence occurred,
+  and whether a reusable experience repair should be learned from that divergence.
+
+  Extract when the agent worked through identifiable tasks involving decisions, tool calls,
+  user confirmations, final communication, or multi-step actions. Skip pure chitchat or simple Q&A
+  with no execution trace.
 
 embedding_template: |-
   {{ trajectory_name }}
@@ -20,85 +25,115 @@ fields:
   - name: trajectory_name
     type: string
     description: |
-      Name the task directly and stably.
+      Name the audited execution boundary directly and stably.
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
-      Do not create near-duplicate names for the same task.
-      Good: "duplicate_request_resolution", "async_task_hang_fix", "重复请求处理".
-      Prefer the reusable operation or decision boundary over raw instance wording from the opening request.
+      Do not create near-duplicate names for the same boundary.
+      Good: "cancel_refund_distinction", "final_cost_communication", "取消退款区分".
+      Prefer the first material decision/repair boundary over the broad opening request.
     merge_op: immutable
 
   - name: outcome
     type: string
     description: |
       Use exactly one of: success, failure, partial, unfinished, unknown.
+
+      Choose from reward/evaluation facts when available:
+      - success: all required tool/db/action and communication checks passed.
+      - failure: reward-critical database/action or communication check failed.
+      - partial: some required work succeeded but at least one material requirement failed.
+      - unfinished: execution stopped before the task reached a terminal answer or write boundary.
+      - unknown: evaluation facts are unavailable or ambiguous.
     merge_op: immutable
 
   - name: retrieval_anchor
     type: string
     description: |
-      Positive semantic retrieval text for this record, written for embedding rather than display.
-      Format: "Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response>; Boundary: <verified reusable condition>; Capability: <operation, check, handoff, or response this record can guide>; Target: <primary object or sub-object>."
+      Positive semantic retrieval text for embedding, not display.
+      Format exactly:
+      "Stage: <opening|after_read|before_write|after_write|final_response|terminal_handoff>; Boundary: <first material audited condition>; Capability: <operation/check/communication this record audits>; Target: <primary object or sub-object>; Outcome: <success|failure|partial|unfinished|unknown>."
 
       Rules:
       - Keep it shorter and more retrieval-focused than content.
-      - Describe when the record should be retrieved using positive applies-when language only.
-      - Do not write negative examples, nearby intents, unrelated alternative requests, or broad exclusions here; keep those in Negative Applicability inside content.
-      - Do not copy the opening request when the reusable lesson only becomes valid after reads, verification, failure, or a terminal boundary; anchor on the condition that was actually established.
-      - Generalize identifiers, names, numbers, dates, places, amounts, and raw tool payloads as strictly as content.
+      - Anchor on the condition that was actually established at runtime, not merely the opening request.
+      - Use positive applies-when language only. Put exclusions and near-misses in content.
+      - Generalize identifiers, names, exact amounts, exact dates, paths, and raw payload values.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      Procedure-like operation contract in EXACTLY this format:
+      Write an execution-audit record in EXACTLY this format and label order:
 
       # <trajectory_name>
-      - Domain: <task domain, execution area, or system area>
-      - Trigger: <the reusable user intent or task situation — one sentence>
-      - Operation Intent:
-        - Family: <exactly one of read_verify_only, create_new_object, update_existing_object, close_or_deactivate_object, replace_existing_object, attribute_append_remove, corrective_adjustment, handoff_after_verification, final_response_only>
-        - Primary object: <the narrowest object or sub-object whose state, membership, or lifecycle this record changes, verifies, creates, closes/deactivates, replaces, hands off, or reports>
-        - Target object/lifecycle: <the single intended final state, lifecycle transition, handoff target, or read result for that primary object>
-      - Preconditions:
-        1. <state, identity, policy, tool-observation, or confirmation prerequisite>
-        2. <...>
-      - Immutable Object Boundary:
-        - <object fields, lifecycle state, policy facts, permissions, or ownership facts that must be read/verified and not inferred or overwritten>
-      - Procedure:
-        1. <future-agent instruction for the first decision/action step; include key tool names when useful>
-        2. <future-agent instruction for the next decision/action step>
-        3. <continue until the write/confirmation/final-response boundary is clear>
-      - Write Field Provenance:
-        - <write-relevant field family>: <allowed source such as latest user request, explicit confirmation, fresh tool observation, computed policy result, stable policy, or current object state>
-      - Anti-patterns:
-        - <mistake, missing check, wrong ordering, over-broad action, or failed attempt to avoid>
-      - Applicability Boundary:
-        - <when this memory applies>
-        - <when this memory should not be used>
-      - Negative Applicability:
-        - <nearby intent, object lifecycle, policy state, permission state, or target object where this memory must not be applied>
-      - Result: <final outcome and important side effects — one sentence>
-      - Evidence: <brief generalized source note from this session, including success/failure/partial status, without digits, raw identifiers, personal names, contact values, exact amounts, exact counts, exact dates, locations, paths, or other instance-local values>
+      - Outcome: <success|failure|partial|unfinished|unknown>
+      - Domain: <task domain, tool family, or execution area>
+      - User Goal: <generalized user goal in one sentence>
+      - Loaded Experiences:
+        - <none OR E1: <experience memory filename/short name> — <triggered before tool if known; relevant|irrelevant|over-broad|misleading|ignored|helpful; brief reason>>
+      - Runtime Facts:
+        - Evaluation: <db/action/communication checks or equivalent success/failure facts, generalized>
+        - Decisive tool facts: <fresh tool outputs, policy facts, user confirmations, candidate args, or final response facts that determine correctness>
+      - Actual Execution Path:
+        A1. <actual business-relevant read/tool/user-confirmation/policy-branch/write/final-communication step; include generalized decisive args and output facts>
+        A2. <next actual step>
+        A3. <continue compactly; omit memory-loading plumbing, hidden retries, and chitchat>
+      - Expected Path:
+        R1. <expected reward/policy/user-confirmed step at the same abstraction level as Actual Execution Path>
+        R2. <next expected step>
+        R3. <continue only for reward-critical requirements>
+      - Alignment:
+        - R1 -> A1: <matched|missing_expected_call|wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|extra_unexpected_call|ambiguous|not_applicable>; <brief evidence>
+        - R2 -> <Ax or ∅>: <status>; <brief evidence>
+      - First Wrong Tool Call:
+        - Step: <Ax, final_response, or none>
+        - Tool: <actual tool name such as book_reservation, cancel_reservation, search_direct_flight, update_reservation_flights, update_reservation_baggages, communicate_with_user, or none>
+        - Candidate shape: <generalized decisive candidate args/content/object/cardinality/field provenance that made this call wrong>
+        - Error type: <none|wrong_tool|wrong_arguments|wrong_object|wrong_policy_branch|missing_read_before_tool|missing_confirmation_before_tool|missing_communication|premature_write|extra_write|tool_error|unrecoverable>
+        - Expected at call: <expected tool, args, target object, policy branch, confirmation, or communication content at this exact boundary>
+        - Why this call is first: <why no earlier actual tool call materially changed reward or recoverability>
+      - First Material Divergence:
+        - Step: <same as First Wrong Tool Call.Step when an actual wrong tool call exists; otherwise final_response, expected_missing_tool, or none>
+        - Kind: <none|wrong_tool|wrong_arguments|wrong_object|wrong_policy_branch|missing_read|missing_confirmation|missing_communication|premature_write|extra_write|tool_error|unrecoverable>
+        - Expected: <what should have happened at that boundary>
+        - Actual: <what happened instead>
+        - Impact: <why this changed reward, database state, required communication, or recoverability>
+      - Causal Analysis:
+        - Root cause: <concise causal diagnosis grounded in visible evidence; name the missed runtime fact, policy distinction, object binding, field provenance, user confirmation, or communication obligation>
+        - Evidence: <tool output, user confirmation, candidate args, final response, or evaluation feedback proving the diagnosis>
+        - Ruled out: <what was not the primary cause, such as successful db writes, correct earlier checks, or unrelated reminders>
+        - Memory effect: <missing|irrelevant|over-broad|misleading|ignored|too_weak|helpful_but_not_sufficient|necessary|not_needed>; <name the concrete experience/rule type when visible>
+        - Misleading loaded experience: <Ei/name or none>
+        - How memory affected the wrong call: <if a loaded experience was over-broad/misleading/too_weak, state how it affected or failed to prevent First Wrong Tool Call; otherwise none>
+      - Experience Repair Signal:
+        - Action: <create|update|skip>
+        - Target experience: <existing loaded experience name when updating an over-broad/misleading/too_weak memory; new concise name when creating; none when skipping>
+        - Trigger boundary: <MUST equal First Wrong Tool Call.Tool when Action is create/update; use none when Action is skip or no actual/preventable tool boundary exists>
+        - Repair principle: <one sentence with the minimal reusable repair; if skip, explain why no experience update is needed>
+        - Do not learn: <nearby broad workflow, success path, object-shape change, or non-causal lesson that must not be turned into experience>
+      - Applicability:
+        - Applies when: <positive reusable condition for this audit>
+        - Does not apply when: <nearby intent/object/policy state where this audit must not be used>
+      - Result: <final outcome and important side effects in one generalized sentence>
 
       Rules:
-      - Write for future agent execution. Capture the reusable contract: trigger -> prerequisites -> read/verify -> confirm if needed -> one primary write, handoff, or final response -> verify/communicate result.
-      - Extract one record per reusable operation boundary: one primary user intent, one primary tool-effect target, and one lifecycle or reporting boundary. The boundary is narrower than the Family enum: two actions with the same Family still need separate records when they affect different sub-objects, collections, lifecycle states, write-field provenance, or continuation policies.
-      - Split separable intents, pivots, follow-ups, prerequisite-only reads, state-changing actions, and final user-visible responses when they are independently reusable; omit low-value side work. The split rule is structural: separate by target, effect, provenance, lifecycle, and continuation boundary, not by any domain-specific workflow name.
-      - Do not create an additional umbrella record that summarizes multiple separately reusable operations from the same session. If a session contains several independent tool-effect targets, output the separate target-level records and omit the broad whole-session summary.
-      - Do not combine multiple state-changing tool effects in one record when they affect different primary targets, sub-objects, collections, lifecycle transitions, write-field provenance scopes, or continuation policies. Mention cross-boundary ordering only as prerequisite, boundary, or negative applicability.
-      - A coordinated multi-target request is not one reusable procedure record. Output target-level records and put shared confirmation, dependency, or ordering constraints only in Preconditions, Applicability Boundary, Anti-patterns, or Negative Applicability.
-      - Use replace_existing_object only for an atomic replacement operation on one primary object boundary. If the session implements replacement through separate tool effects that close/deactivate one object and create another object, emit separate close/deactivate and create records; do not set Primary object to a joined source-and-target phrase.
-      - Family must be exactly one listed enum value. Do not invent compound labels. Use handoff_after_verification when the reusable path ends in handoff after verification.
-      - Procedure must describe only the primary operation in this record. Mention other operations only as prerequisites, consequences, boundaries, or negative applicability.
-      - Stop each record at its family boundary: update_existing_object stops after update verification, close_or_deactivate_object after closure/deactivation verification, create_new_object after creation verification, replace_existing_object after replacement verification, handoff_after_verification after handoff verification.
-      - Do not include a second lifecycle-changing write in the Procedure, Target, Result, or Evidence of the same record, even when that later write happened immediately after the first one.
-      - Do not let a later operation in the same session rename, narrow, or extend this record's Trigger, Target, Procedure, Result, or Evidence. Put the later operation in a separate record.
-      - Put immutable facts and write/user-visible field sources in their dedicated sections. Do not copy fields from a previous/source object into a new/replacement object without current user request or explicit confirmation.
-      - Keep blocked actions and failed lessons in Anti-patterns / Negative Applicability / Evidence, not as positive procedure steps. Do not invent a corrected path when the session did not demonstrate one.
-      - Keep retrieval-specific wording out of content. Use retrieval_anchor for positive indexed text, and keep nearby non-applicable intents only in Negative Applicability.
-      - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts/counts, exact locations/paths, product names, and raw tool payloads. Use semantic placeholders such as requested quantity, selected object, calculated amount, source object, target object, or applicable policy instead of copying concrete values. Keep tool names only when they are part of the reusable path. Evidence must also stay generalized and should not contain digits; do not use it to preserve instance-local ids, names, counts, amounts, locations, or dates.
-      - Use exactly the title, Domain line, and 11 labels above in this exact order.
-      - Trigger, Result, and Evidence are ONE sentence each.
-      - No extra headings, free paragraphs, or closing remarks.
+      - AUDIT FIRST: The record must primarily explain actual execution vs expected requirements. Do not write a polished SOP that hides the mistake.
+      - ALWAYS INCLUDE ALL SECTIONS: Include every label above, even for success. For success, set First Wrong Tool Call Step/Tool to `none`, First Material Divergence Step to `none`, Kind to `none`, Experience Repair Signal Action to `skip`, and explain what preserved success.
+      - COMPLETE BUT COMPACT ACTUAL PATH: Include all reward-relevant business reads, decisive tool outputs, confirmations, writes, policy branches, and final required communication. Omit memory loading, duplicated retries with no new state, and casual conversation.
+      - EXPECTED PATH IS REWARD/POLICY GROUNDED: Build Expected Path from evaluation feedback, rubric requirements, explicit user confirmations, tool facts, and visible policy gates. Do not invent requirements not supported by runtime evidence.
+      - FIRST WRONG TOOL CALL ONLY: Output exactly one First Wrong Tool Call. Choose the earliest actual candidate tool call whose tool name, args, target object, policy branch, missing precondition, or user-visible content materially caused the reward failure. If all database/action calls passed and only final communication failed, the First Wrong Tool Call is the final `communicate_with_user` call. If the failure is only a missing expected call with no wrong actual call, set Tool to `none` and explain the missing expected boundary.
+      - FIRST DIVERGENCE ONLY: First Material Divergence must point to the earliest boundary that materially changed reward or recoverability and should match First Wrong Tool Call when an actual wrong tool call exists. If all database/actions passed and only final communication failed, the divergence is `final_response`, not the earlier successful tool calls.
+      - CAUSAL ANALYSIS, NOT HIDDEN THOUGHTS: Provide a concise evidence-backed causal diagnosis. Do not output hidden chain-of-thought, private reasoning transcripts, or unverifiable speculation.
+      - EXPERIENCE HANDOFF: Experience Repair Signal is the only section that should recommend experience creation/update. Recommend create/update only when a narrow reminder before the First Wrong Tool Call could prevent the same failure in future. When Action is create/update, Trigger boundary must be exactly the First Wrong Tool Call.Tool; do not choose a broader or earlier tool. Otherwise choose skip.
+      - BAD EXPERIENCE SELF-CORRECTION: If a loaded experience was over-broad, misleading, or too weak and it contributed to or failed to prevent the First Wrong Tool Call, set `Memory effect` accordingly, set `Misleading loaded experience` to that Ei/name, set `Experience Repair Signal.Action` to `update`, and set `Target experience` to that existing loaded experience. Do not create a new experience when an existing loaded experience is the causal memory problem.
+      - IGNORE NON-CAUSAL REMINDERS: If a loaded experience triggered but did not affect the First Wrong Tool Call, mark it as irrelevant in Loaded Experiences or Ruled out. Do not update it merely because it appeared in context.
+      - SUCCESS DOES NOT TRAIN EXPERIENCE: Successful trajectories are useful references, but they normally must not propose experience updates. Use Action: skip unless the outcome is partial/failure and the repair is reusable.
+      - DO NOT LEARN FULL WORKFLOWS: Do not turn a successful path into a broad workflow memory. The trajectory may record success, but the repair signal must stay focused on failure prevention.
+      - PRESERVE POLICY DISTINCTIONS: Explicitly separate cancellation permission from refund eligibility, changing one existing object from creating replacements, one booking from multiple bookings, final required communication from database success, and confirmed user targets from inferred targets.
+      - PRESERVE OBJECT BOUNDARIES: Do not imply changing object cardinality, lifecycle shape, passenger/object membership, or target object unless the user explicitly requested and confirmed that exact change and tool/policy facts support it.
+      - COMMUNICATION FAILURES ARE FIRST-CLASS: If the only failed check is missing required user-visible information, the audit and repair signal must target `communicate_with_user` or final response content, not unrelated tool workflows.
+      - WRITE ARGUMENT FAILURES NEED PROVENANCE: If a write tool failed because arguments were wrong, identify in First Wrong Tool Call.Candidate shape which field family came from the wrong source: stale tool result, unconfirmed user statement, incorrect calculation, copied source object, wrong payment allocation, wrong date, wrong object id, or object-cardinality change.
+      - EXPERIENCE ALIGNMENT: Loaded Experiences must list only experience memories actually read/injected. Give each loaded experience a stable short alias (`E1`, `E2`, ...), include the tool boundary where it triggered when visible, and classify its effect as relevant, irrelevant, over-broad, misleading, ignored, too_weak, helpful, or necessary. Do not list case memory, trajectory memory, or the current case as loaded experiences. If none were loaded, write `none`.
+      - GENERALIZE AGGRESSIVELY: Remove raw identifiers, personal names, contact values, exact dates, exact amounts, exact counts, exact locations/paths, and raw tool payloads. Use semantic placeholders such as selected reservation, requested amount, confirmed payment method, final required amount, source object, target object, or applicable policy.
+      - MACHINE-PARSEABLE STYLE: Use exactly the labels and marker prefixes above (`A1.`, `R1.`, `R1 -> A1:`). Use concise markdown bullets. No extra headings, free paragraphs, code fences, or closing remarks.
     merge_op: patch

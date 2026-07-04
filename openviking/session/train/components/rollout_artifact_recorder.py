@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from openviking.message import ToolPart
+from openviking.message import TextPart, ToolPart
 from openviking.session.train.components.dataset_service import (
     case_to_dict,
     evaluation_to_dict,
@@ -241,9 +241,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         for the full pipeline to finish, which is important for long runs and
         crash recovery.
         """
-        commit_results = list(
-            epoch_result.apply_result.metadata.get("commit_results", []) or []
-        )
+        commit_results = list(epoch_result.apply_result.metadata.get("commit_results", []) or [])
         await self.record_train_epoch(
             epoch=epoch_result.epoch,
             analyses=epoch_result.analyses,
@@ -260,9 +258,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         context: Any,
     ) -> None:
         """Lifecycle hook: write eval rollout artifacts immediately after each eval pass."""
-        label = str(
-            evaluation_result.metadata.get("rollout_stage") or "test_rollout"
-        )
+        label = str(evaluation_result.metadata.get("rollout_stage") or "test_rollout")
         self.record_eval(
             label=label,
             epoch=evaluation_result.epoch,
@@ -280,7 +276,9 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
             run_dir=str(self.run_dir),
             rollouts_root=str(self.rollouts_root),
             case_groups=case_groups,
-            latest_failed_rollout=str(self._latest_failed_rollout) if self._latest_failed_rollout else None,
+            latest_failed_rollout=str(self._latest_failed_rollout)
+            if self._latest_failed_rollout
+            else None,
         )
         self.run_dir.mkdir(parents=True, exist_ok=True)
         index_path = self.run_dir / "rollouts_index.json"
@@ -339,7 +337,9 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         rollout = record.rollout
         _write_json(rollout_dir / "status.json", _status_payload(record))
         _write_json(rollout_dir / "rollout.json", _rollout_payload(record))
-        _write_json(rollout_dir / "messages.json", [message.to_dict() for message in rollout.messages])
+        _write_json(
+            rollout_dir / "messages.json", [message.to_dict() for message in rollout.messages]
+        )
         _write_json(rollout_dir / "tool_calls.json", _tool_calls(rollout))
         _write_json(rollout_dir / "evaluation.json", evaluation_to_dict(record.evaluation))
         (rollout_dir / "memory_context.md").write_text(_memory_context(rollout), encoding="utf-8")
@@ -498,14 +498,16 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         if split is None or task_no is None or task_id is None or epoch is None or index is None:
             return None
         group_id = (
-            f"{_safe_fragment(split)}_task_"
-            f"{_safe_fragment(str(task_no))}_"
-            f"{_safe_fragment(task_id)}"
+            f"{_safe_fragment(split)}_task_{_safe_fragment(str(task_no))}_{_safe_fragment(task_id)}"
         )[:120]
         return self.rollouts_root / group_id / f"epoch_{epoch}" / phase / f"trial_{index}"
 
     def _write_group_readme(self, group_dir: Path, group_entry: dict[str, Any]) -> None:
-        failed = [item for item in group_entry["rollouts"] if not item.get("passed") or item.get("commit_error")]
+        failed = [
+            item
+            for item in group_entry["rollouts"]
+            if not item.get("passed") or item.get("commit_error")
+        ]
         lines = [
             f"# Rollout artifact group: {group_entry['case_group_id']}",
             "",
@@ -702,34 +704,61 @@ def _tool_calls(rollout: Rollout) -> list[dict[str, Any]]:
 
 def _prompt_for_llm(record: _RolloutRecord) -> str:
     status = _status_payload(record)
-    return "\n".join(
-        [
-            "# Analyze this rollout",
-            "",
-            "Read all files in this directory, especially:",
-            "- memory_context.md: memory injected into the agent prompt at rollout time",
-            "- messages.json and tool_calls.json: trajectory",
-            "- evaluation.json: failure signal",
-            "- memory_diff.json: training memory update result when present",
-            "",
-            "## Status",
-            "",
-            "```json",
-            json.dumps(jsonable(status), ensure_ascii=False, indent=2),
-            "```",
-            "",
-            "Please identify whether the failure is caused by missing memory, "
-            "wrong memory, ignored memory, bad tool use, or task ambiguity.",
-        ]
-    ) + "\n"
+    return (
+        "\n".join(
+            [
+                "# Analyze this rollout",
+                "",
+                "Read all files in this directory, especially:",
+                "- memory_context.md: memory injected into the agent prompt at rollout time",
+                "- messages.json and tool_calls.json: trajectory",
+                "- evaluation.json: failure signal",
+                "- memory_diff.json: training memory update result when present",
+                "",
+                "## Status",
+                "",
+                "```json",
+                json.dumps(jsonable(status), ensure_ascii=False, indent=2),
+                "```",
+                "",
+                "Please identify whether the failure is caused by missing memory, "
+                "wrong memory, ignored memory, bad tool use, or task ambiguity.",
+            ]
+        )
+        + "\n"
+    )
 
 
 def _memory_context(rollout: Rollout) -> str:
+    parts: list[str] = []
     metadata = rollout.metadata or {}
     value = metadata.get("memory")
-    if value is None:
-        return ""
-    return str(value)
+    if value is not None and str(value).strip():
+        parts.append(str(value).strip())
+
+    pre_tool_reminders = _pre_tool_experience_reminders(rollout)
+    if pre_tool_reminders:
+        parts.append(
+            "# Pre-tool Experience Reminders\n\n"
+            "These experience reminders were injected as user messages immediately before "
+            "the agent retried a tool call.\n\n" + "\n\n---\n\n".join(pre_tool_reminders)
+        )
+    return "\n\n---\n\n".join(parts)
+
+
+def _pre_tool_experience_reminders(rollout: Rollout) -> list[str]:
+    reminders: list[str] = []
+    for message in getattr(rollout, "messages", []) or []:
+        if getattr(message, "role", None) != "user":
+            continue
+        for part in getattr(message, "parts", []) or []:
+            if not isinstance(part, TextPart):
+                continue
+            text = str(part.text or "").strip()
+            if "<experience_reminder>" not in text or "</experience_reminder>" not in text:
+                continue
+            reminders.append(text)
+    return list(dict.fromkeys(reminders))
 
 
 def _task_case_experience_skill(rollout: Rollout) -> str:
@@ -742,9 +771,7 @@ def _task_case_experience_skill(rollout: Rollout) -> str:
 
 def _case_group_id(rollout: Rollout) -> str:
     split = _safe_fragment(_split(rollout) or "split")
-    task_no = _safe_fragment(
-        str(_task_no(rollout) if _task_no(rollout) is not None else "x")
-    )
+    task_no = _safe_fragment(str(_task_no(rollout) if _task_no(rollout) is not None else "x"))
     task_id = _safe_fragment(
         str(_task_id(rollout) or _original_case_name(rollout) or rollout.case.name)
     )
@@ -929,7 +956,9 @@ def _format_memory_diff_markdown(memory_diff: dict[str, Any]) -> str:
     operations = operations if isinstance(operations, dict) else {}
     for item in operations.get("adds", []) or []:
         if isinstance(item, dict):
-            lines.extend(_memory_diff_file_section("add", item.get("uri"), "", item.get("after", "")))
+            lines.extend(
+                _memory_diff_file_section("add", item.get("uri"), "", item.get("after", ""))
+            )
     for item in operations.get("updates", []) or []:
         if isinstance(item, dict):
             lines.extend(

@@ -8,14 +8,18 @@ import re
 import time
 import uuid
 from contextlib import AsyncExitStack
+from dataclasses import dataclass, field
 from datetime import datetime
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from vikingbot.agent.context import ContextBuilder
+from vikingbot.agent.experience_constraints import (
+    ConstraintActivationInput,
+    apply_experience_constraint_reminder,
+)
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
@@ -87,6 +91,23 @@ class _PlainTextFinal:
     content: str | None = None
 
 
+@dataclass(slots=True)
+class AgentLoopRunResult:
+    """Result from one AgentLoop run, including the final runtime messages."""
+
+    final_content: str | None
+    final_reasoning_content: str | None
+    tools_used: list[dict]
+    token_usage: dict[str, int]
+    iteration: int
+    messages: list[dict[str, Any]] = field(default_factory=list)
+
+    def __iter__(self):
+        yield self.final_content
+        yield self.final_reasoning_content
+        yield self.tools_used
+        yield self.token_usage
+        yield self.iteration
 
 
 class AgentLoop:
@@ -195,6 +216,8 @@ class AgentLoop:
         self._mcp_connected = False
         self._mcp_connecting = False
         self._ov_clients: dict[str, Any] = {}
+        self._constraint_reminded_exp_uris: dict[str, set[str]] = {}
+        self._last_run_messages: dict[str, list[dict[str, Any]]] = {}
         self._register_default_tools()
 
     async def _connect_mcp(self) -> None:
@@ -682,6 +705,72 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    async def _maybe_apply_experience_constraint_reminder(
+        self,
+        *,
+        messages: list[dict],
+        response: Any,
+        session_key: SessionKey,
+        openviking_connection: dict[str, Any] | None,
+        tools_used: list[dict],
+    ) -> list[dict] | None:
+        """Append one experience constraint reminder before executing tool calls.
+
+        A matching experience URI is reminded at most once per live session.  If
+        a reminder is appended, the caller reruns the agent step with the same
+        agent/thinking configuration by continuing the main loop.
+        """
+
+        del tools_used
+        tool_calls = list(getattr(response, "tool_calls", []) or [])
+        if not tool_calls:
+            return None
+
+        try:
+            # Build query from the latest user messages; retrieval is only a
+            # candidate prefilter, trigger_code decides whether to activate.
+            user_messages = [
+                m.get("content", "")
+                for m in messages
+                if m.get("role") == "user" and isinstance(m.get("content"), str)
+            ]
+            query = "\n".join(user_messages[-3:])
+            workspace_id = self._get_ov_workspace_id(session_key)
+            reminded = self._constraint_reminded_exp_uris.setdefault(
+                session_key.safe_name(),
+                set(),
+            )
+            experiences = await self.context.memory.get_viking_constraint_experiences(
+                query=query,
+                workspace_id=workspace_id,
+                exclude_uris=list(reminded),
+                openviking_connection=openviking_connection,
+            )
+            if not experiences:
+                return None
+
+            for tool_call in tool_calls:
+                decision = apply_experience_constraint_reminder(
+                    ConstraintActivationInput(
+                        messages=messages,
+                        candidate_tool=tool_call.name,
+                        candidate_tool_args=tool_call.arguments,
+                        experiences=experiences,
+                        reminded_exp_uris=reminded,
+                    )
+                )
+                if not decision.reminded:
+                    continue
+                logger.info(
+                    "[EXP_CONSTRAINT_REMINDER]: "
+                    f"experiences={decision.experience_uris}, tool={tool_call.name}, "
+                    f"triggered={decision.triggered_uris}"
+                )
+                return decision.messages
+        except Exception as exc:
+            logger.warning(f"[EXP_CONSTRAINT_REMINDER]: failed: {exc}")
+        return None
+
     async def _run_agent_loop(
         self,
         messages: list[dict],
@@ -696,7 +785,7 @@ class AgentLoop:
         stop_tool_names: list[str] | None = None,
         on_plain_text: Any | None = None,
         channel_metadata: dict[str, Any] | None = None,
-    ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
+    ) -> AgentLoopRunResult:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
 
@@ -720,7 +809,9 @@ class AgentLoop:
             channel_metadata: Channel-specific metadata for tools that publish outbound messages
 
         Returns:
-            tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
+            AgentLoopRunResult. It remains iterable as the legacy
+            (final_content, final_reasoning_content, tools_used, token_usage, iteration) tuple,
+            and also carries the final runtime messages as the source of truth for artifacts.
         """
         iteration = 0
         final_content = None
@@ -731,7 +822,6 @@ class AgentLoop:
             "completion_tokens": 0,
             "total_tokens": 0,
         }
-        write_exp_injected = False
         stop_tools = set(stop_tool_names or [])
 
         def accumulate_token_usage(response: Any) -> None:
@@ -776,43 +866,18 @@ class AgentLoop:
                 )
 
             if response.has_tool_calls:
-                # Inject experience memory before write-related tool calls (once per session)
-                if not write_exp_injected:
-                    _ov_cfg = load_config().ov_server
-                    _write_tools = set(_ov_cfg.exp_write_tools)
-                    if any(tc.name in _write_tools for tc in response.tool_calls):
-                        write_exp_injected = True
-                        try:
-                            # Build query from last 3 user messages
-                            _user_msgs = [
-                                m["content"]
-                                for m in messages
-                                if m.get("role") == "user" and isinstance(m.get("content"), str)
-                            ]
-                            _query = "\n".join(_user_msgs[-3:])
-                            workspace_id = (
-                                self.sandbox_manager.to_workspace_id(session_key)
-                                if self.sandbox_manager
-                                else "shared"
-                            )
-                            _exp = await self.context.memory.get_viking_experience_context(
-                                query=_query,
-                                workspace_id=workspace_id,
-                                openviking_connection=openviking_connection,
-                            )
-                            logger.info(
-                                f"[WRITE_EXP]: write tool detected, exp_found={bool(_exp)}, query={_query[:50]}"
-                            )
-                            if _exp:
-                                messages.append(
-                                    {
-                                        "role": "user",
-                                        "content": f"## Relevant Agent Experience\n{_exp}",
-                                    }
-                                )
-                                continue
-                        except Exception as _e:
-                            logger.warning(f"[WRITE_EXP]: failed to load experience: {_e}")
+                reminder_hook = getattr(self, "_maybe_apply_experience_constraint_reminder", None)
+                if callable(reminder_hook):
+                    reminder_messages = await reminder_hook(
+                        messages=messages,
+                        response=response,
+                        session_key=session_key,
+                        openviking_connection=openviking_connection,
+                        tools_used=tools_used,
+                    )
+                    if reminder_messages is not None:
+                        messages = reminder_messages
+                        continue
 
                 final_reasoning_content = response.reasoning_content
                 args_list = [tc.arguments for tc in response.tool_calls]
@@ -899,8 +964,7 @@ class AgentLoop:
                     tools_used.append(tool_used_dict)
 
                 if any(
-                    tool_call.name in stop_tools
-                    for _idx, tool_call, _result, _duration in results
+                    tool_call.name in stop_tools for _idx, tool_call, _result, _duration in results
                 ):
                     final_content = ""
                     break
@@ -960,7 +1024,9 @@ class AgentLoop:
 
         if final_content == "" and tools_used and tools_used[-1].get("tool_name") in stop_tools:
             pass
-        elif final_content is None or (isinstance(final_content, str) and not final_content.strip()):
+        elif final_content is None or (
+            isinstance(final_content, str) and not final_content.strip()
+        ):
             if iteration >= self.max_iterations:
                 messages.append(
                     {
@@ -974,7 +1040,11 @@ class AgentLoop:
                         ),
                     }
                 )
-                response, _streamed_content, streamed_reasoning = await self._chat_with_stream_events(
+                (
+                    response,
+                    _streamed_content,
+                    streamed_reasoning,
+                ) = await self._chat_with_stream_events(
                     messages=messages,
                     tools=[],
                     session_key=session_key,
@@ -1002,7 +1072,18 @@ class AgentLoop:
             else:
                 final_content = "I've completed processing but have no response to give."
 
-        return final_content, final_reasoning_content, tools_used, token_usage, iteration
+        final_messages = list(messages)
+        last_run_messages = getattr(self, "_last_run_messages", None)
+        if isinstance(last_run_messages, dict):
+            last_run_messages[session_key.safe_name()] = final_messages
+        return AgentLoopRunResult(
+            final_content=final_content,
+            final_reasoning_content=final_reasoning_content,
+            tools_used=tools_used,
+            token_usage=token_usage,
+            iteration=iteration,
+            messages=final_messages,
+        )
 
     @trace(
         name="process_message",
@@ -1270,9 +1351,7 @@ class AgentLoop:
 
             # Track newly recalled experience URIs for deduplication
             newly_recalled_exp_uris = getattr(message_context, "latest_recalled_exp_uris", [])
-            newly_recalled_exp_content = getattr(
-                message_context, "latest_recalled_exp_content", ""
-            )
+            newly_recalled_exp_content = getattr(message_context, "latest_recalled_exp_content", "")
             if newly_recalled_exp_uris:
                 existing_uris = set(exp_exclude_uris)
                 for uri in newly_recalled_exp_uris:

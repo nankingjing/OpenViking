@@ -66,6 +66,8 @@ class ExperienceGradientEstimator:
         extract_context = _context_with_analysis_messages(context, analysis)
 
         async def estimate_one(trajectory: Trajectory) -> list[PatchSemanticGradient]:
+            if not _should_update_experience_from_trajectory(trajectory):
+                return []
             try:
                 operations = await self._run_extract_loop(trajectory, extract_context)
             except Exception:
@@ -133,6 +135,10 @@ class ExperienceGradientEstimator:
         )
         operations, _ = await orchestrator.run()
         return operations
+
+
+def _should_update_experience_from_trajectory(trajectory: Trajectory) -> bool:
+    return str(getattr(trajectory, "outcome", "") or "").strip().lower() != "success"
 
 
 def _context_with_analysis_messages(

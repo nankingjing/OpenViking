@@ -168,6 +168,31 @@ def test_tau2_rollout_messages_use_completed_structured_tool_parts():
         final_content="done",
         evaluation_result=None,
         reward=1.0,
+        runtime_messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "user request"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_user_details",
+                            "arguments": '{"user_id": "emma_kim_9957"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "name": "get_user_details",
+                "content": '{"membership": "gold"}',
+            },
+            {"role": "assistant", "content": "done"},
+        ],
     )
 
     assert isinstance(rollout_messages[0].parts[0], TextPart)
@@ -208,6 +233,12 @@ def test_tau2_communicate_with_user_renders_as_dialogue():
         final_content=None,
         evaluation_result=None,
         reward=1.0,
+        runtime_messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "user request"},
+            {"role": "assistant", "content": "Could you provide your user ID?"},
+            {"role": "user", "content": "Sure, it is emma_kim_9957."},
+        ],
     )
 
     assert rollout_messages[2].role == "assistant"
@@ -233,6 +264,22 @@ def test_tau2_rollout_messages_omit_empty_final_after_done():
         final_content=None,
         evaluation_result=None,
         reward=1.0,
+        runtime_messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "user request"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "done", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "name": "done", "content": "Task Terminated"},
+        ],
     )
 
     assert "tau2-final" not in {message.id for message in rollout_messages}
@@ -259,6 +306,11 @@ def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
         final_content="done",
         evaluation_result=reward_info,
         reward=1.0,
+        runtime_messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "user request"},
+            {"role": "assistant", "content": "done"},
+        ],
     )
     evaluation = _tau2_evaluation(reward=1.0, evaluation_result=reward_info)
 
@@ -434,7 +486,12 @@ def test_tau2_configure_tools_removes_only_openviking_tools():
 
     assert agent.tools.unregistered == ["openviking_search", "openviking_memory_commit"]
     assert agent.tools.tool_names == ["read_file", "web_search"]
-    assert agent.tools.registered == [
+    assert agent.tools.registered == ["get_user_details"]
+
+    skill_agent = FakeAgent()
+    _configure_tools(skill_agent, FakeProvider(), keep_default_tools=True, loader_mode="skill")
+
+    assert skill_agent.tools.registered == [
         "search_experience",
         "read_experience",
         "get_user_details",
@@ -529,6 +586,7 @@ def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
         "keep_default_tools": True,
         "max_iterations": 9,
         "rollout_language": "zh",
+        "loader_mode": "constraint",
     }
 
 
@@ -697,7 +755,7 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     async def fake_run_agent(**kwargs):
         calls.append(("run_agent", threading.get_ident()))
         calls.append(("case_lookup", kwargs.get("case_lookup")))
-        return "final", None, [], {}, 1, None, None, None
+        return "final", None, [], {}, 1, None, None, None, [{"role": "user", "content": "user query"}, {"role": "assistant", "content": "final"}]
 
     monkeypatch.setattr(module, "_tool_provider_cls", lambda: FakeTau2BenchToolProvider)
     monkeypatch.setattr(module, "_build_agent", lambda *args, **kwargs: FakeAgent())
@@ -794,9 +852,7 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
                 {"role": "user", "content": kwargs["current_message"]},
             ]
 
-        def add_assistant_message(
-            self, messages, content, tool_calls=None, reasoning_content=None
-        ):
+        def add_assistant_message(self, messages, content, tool_calls=None, reasoning_content=None):
             msg = {"role": "assistant", "content": content or "[tool call]"}
             if tool_calls:
                 msg["tool_calls"] = tool_calls
@@ -892,6 +948,7 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
         session_key=SimpleNamespace(safe_name=lambda: "session"),
         sender_id="tau2_user",
         keep_default_tools=True,
+        loader_mode="skill",
         case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
     )
 
@@ -915,3 +972,198 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
     assert "read_experience" in messages[tool_result_index]["content"]
     assert tools_used[0]["tool_name"] == "read_file"
     assert tools_used[0]["required_skill"] == "experience_loader"
+
+
+@pytest.mark.asyncio
+async def test_tau2_run_agent_constraint_mode_does_not_force_load_experience_loader_skill(
+    monkeypatch,
+):
+    from vikingbot.providers.base import LLMResponse, ToolCallRequest
+
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    observed = {}
+    real_imports = module._vikingbot_imports()
+
+    class FakeSandboxManager:
+        def get_workspace_path(self, session_key):
+            return Path("/tmp/fake-workspace")
+
+        def to_workspace_id(self, session_key):
+            return "workspace"
+
+        async def get_sandbox(self, session_key):
+            raise AssertionError("constraint mode should not request sandbox for skill install")
+
+    class FakeContextBuilder:
+        def __init__(self, workspace, *, sandbox_manager=None, eval=False, **kwargs):
+            self.workspace = workspace
+            self.sandbox_manager = sandbox_manager
+            self.latest_experience_loader_skill_content = ""
+
+        async def build_messages(self, **kwargs):
+            return [
+                {"role": "system", "content": "ctx system"},
+                {"role": "user", "content": kwargs["current_message"]},
+            ]
+
+        def add_assistant_message(self, messages, content, tool_calls=None, reasoning_content=None):
+            msg = {"role": "assistant", "content": content or "[tool call]"}
+            if tool_calls:
+                msg["tool_calls"] = tool_calls
+            messages.append(msg)
+            return messages
+
+        def add_tool_result(self, messages, tool_call_id, tool_name, result):
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "name": tool_name,
+                    "content": result,
+                }
+            )
+            return messages
+
+    class FakeProvider:
+        async def chat(self, messages, tools=None, **kwargs):
+            observed["llm_messages"] = list(messages)
+            return LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest("call-1", "done", {}, 0)],
+            )
+
+        async def chat_stream(self, **kwargs):
+            from vikingbot.providers.base import LLMStreamEvent
+
+            yield LLMStreamEvent(type="response", response=await self.chat(**kwargs))
+
+        def get_default_model(self):
+            return "fake"
+
+    class FakeAgent:
+        def __init__(self):
+            from vikingbot.agent.tools.registry import ToolRegistry
+
+            self.sandbox_manager = FakeSandboxManager()
+            self.context = FakeContextBuilder(Path("/tmp/fake-workspace"))
+            self.tools = ToolRegistry()
+            self.tools.register(_DoneTool())
+            self.provider = FakeProvider()
+            self.model = "fake"
+            self.temperature = None
+            self.max_iterations = 1
+
+        _chat_with_stream_events = real_imports["AgentLoop"]._chat_with_stream_events
+        _run_agent_loop = real_imports["AgentLoop"]._run_agent_loop
+
+    class _DoneTool:
+        @property
+        def name(self):
+            return "done"
+
+        @property
+        def description(self):
+            return "done"
+
+        @property
+        def parameters(self):
+            return {"type": "object", "properties": {}}
+
+        def to_schema(self):
+            return {
+                "type": "function",
+                "function": {
+                    "name": self.name,
+                    "description": self.description,
+                    "parameters": self.parameters,
+                },
+            }
+
+        def validate_params(self, params):
+            return []
+
+        async def execute(self, tool_context, **kwargs):
+            return ""
+
+    monkeypatch.setattr(
+        module,
+        "_vikingbot_imports",
+        lambda: {**real_imports, "ContextBuilder": FakeContextBuilder},
+    )
+
+    result = await module._run_agent(
+        agent=FakeAgent(),
+        system_prompt="tau2 policy",
+        user_prompt="user query",
+        session_key=SimpleNamespace(safe_name=lambda: "session"),
+        sender_id="tau2_user",
+        keep_default_tools=True,
+        loader_mode="constraint",
+        case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
+    )
+
+    tools_used = result[2]
+    assert not any(tool.get("required_skill") == "experience_loader" for tool in tools_used)
+    assert all("experience_loader" not in str(message) for message in observed["llm_messages"])
+
+
+def test_tau2_rollout_messages_preserve_runtime_user_constraint_reminder():
+    from benchmark.tau2.train.rollout_executor import _build_rollout_messages
+    from openviking.message import TextPart, ToolPart
+
+    rollout_messages = _build_rollout_messages(
+        system_prompt="policy",
+        user_prompt="user request",
+        tools_used=[],
+        final_content=None,
+        evaluation_result=None,
+        reward=0.0,
+        runtime_messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "user request"},
+            {"role": "user", "content": "## Situation\n- Check cancellation eligibility."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_reservation_details",
+                            "arguments": '{"reservation_id": "XEHM4B"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "name": "get_reservation_details",
+                "content": '{"reservation_id": "XEHM4B"}',
+            },
+        ],
+    )
+
+    user_texts = [
+        part.text
+        for message in rollout_messages
+        if message.role == "user"
+        for part in message.parts
+        if isinstance(part, TextPart)
+    ]
+    assert "## Situation\n- Check cancellation eligibility." in user_texts
+    assert not any(
+        isinstance(part, ToolPart) and part.tool_name == "experience_constraint_reminder"
+        for message in rollout_messages
+        for part in message.parts
+    )
+    tool_parts = [
+        part
+        for message in rollout_messages
+        for part in message.parts
+        if isinstance(part, ToolPart)
+    ]
+    assert tool_parts[0].tool_name == "get_reservation_details"
+    assert tool_parts[0].tool_input == {"reservation_id": "XEHM4B"}

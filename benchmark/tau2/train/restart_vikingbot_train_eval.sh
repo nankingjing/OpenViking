@@ -11,18 +11,22 @@ set -euo pipefail
 # Launcher-only options:
 #   --slot N   Run an isolated slot. Slot 0 is the default legacy setup. Slot N>0
 #              uses separate ports, OpenViking config/data, logs, and result dir.
+#   --auto-commit
+#              Automatically commit pending code changes before starting services
+#              and train/eval.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TAU2_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${TAU2_DIR}/../.." && pwd)"
 
 SLOT="${TAU2_TRAIN_SLOT:-0}"
+AUTO_COMMIT=false
 declare -a TRAIN_CLI_ARGS=()
 
 usage() {
   cat <<'USAGE'
 Usage:
-  bash benchmark/tau2/train/restart_vikingbot_train_eval.sh [--slot N] [train/eval args...]
+  bash benchmark/tau2/train/restart_vikingbot_train_eval.sh [--slot N] [--auto-commit] [train/eval args...]
 
 Launcher options:
   --slot N  Isolated experiment slot. Slot 0 is default/legacy. Slot N>0 uses:
@@ -32,6 +36,9 @@ Launcher options:
             OV config   = ~/.openviking_N/ov.conf
             OV data     = ~/.openviking_N/data
             result dir  = result/tau2/train_N
+  --auto-commit
+            Commit pending code changes before launching the run, matching the
+            LoCoMo vikingbot eval helper behavior.
 
 All remaining args are passed to benchmark/tau2/train/run_batch_train_eval.sh.
 USAGE
@@ -50,6 +57,10 @@ parse_launcher_args() {
         ;;
       --slot=*)
         SLOT="${1#--slot=}"
+        shift 1
+        ;;
+      --auto-commit)
+        AUTO_COMMIT=true
         shift 1
         ;;
       -h|--help)
@@ -74,6 +85,24 @@ validate_slot() {
     echo "[restart-vikingbot-train] ERROR: --slot must be a non-negative integer, got: ${SLOT}" >&2
     exit 1
   fi
+}
+
+auto_commit_if_requested() {
+  if [[ "${AUTO_COMMIT}" != "true" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
+    local commit_message
+    commit_message="auto-commit before tau2 train eval $(date +%Y%m%d_%H%M%S)"
+    log "[auto-commit] detected pending changes, committing..."
+    git -C "${REPO_ROOT}" add -A
+    git -C "${REPO_ROOT}" commit -m "${commit_message}"
+  else
+    log "[auto-commit] working tree clean, nothing to commit"
+  fi
+
+  log "[auto-commit] current commit: $(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 }
 
 parse_launcher_args "$@"
@@ -104,6 +133,7 @@ OPENVIKING_BOT_PORT="${OPENVIKING_BOT_PORT:-${DEFAULT_OPENVIKING_BOT_PORT}}"
 TAU2_SERVICE_HOST="${TAU2_SERVICE_HOST:-127.0.0.1}"
 TAU2_SERVICE_PORT="${TAU2_SERVICE_PORT:-${DEFAULT_TAU2_SERVICE_PORT}}"
 TAU2_ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-vikingbot}"
+TAU2_EXPERIENCE_LOADER_MODE="${TAU2_EXPERIENCE_LOADER_MODE:-constraint}"
 TAU2_MAX_ROLLOUT_CONCURRENCY="${TAU2_MAX_ROLLOUT_CONCURRENCY:-150}"
 TAU2_ROLLOUT_THREAD_WORKERS="${TAU2_ROLLOUT_THREAD_WORKERS:-${TAU2_MAX_ROLLOUT_CONCURRENCY}}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-180}"
@@ -310,7 +340,7 @@ start_openviking_server() {
 }
 
 start_tau2_service() {
-  log "restarting tau2 service on ${TAU2_SERVICE_HOST}:${TAU2_SERVICE_PORT} backend=${TAU2_ROLLOUT_BACKEND}"
+  log "restarting tau2 service on ${TAU2_SERVICE_HOST}:${TAU2_SERVICE_PORT} backend=${TAU2_ROLLOUT_BACKEND} loader_mode=${TAU2_EXPERIENCE_LOADER_MODE}"
   log "tau2 service concurrency=${TAU2_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${TAU2_ROLLOUT_THREAD_WORKERS}"
   log "tau2 service log: ${TAU2_SERVICE_LOG}"
   : > "${TAU2_SERVICE_LOG}"
@@ -324,6 +354,7 @@ start_tau2_service() {
       --port "${TAU2_SERVICE_PORT}" \
       --config "${OPENVIKING_CONFIG_FILE}" \
       --rollout-backend "${TAU2_ROLLOUT_BACKEND}" \
+      --loader-mode "${TAU2_EXPERIENCE_LOADER_MODE}" \
       --max-rollout-concurrency "${TAU2_MAX_ROLLOUT_CONCURRENCY}" \
       --rollout-thread-workers "${TAU2_ROLLOUT_THREAD_WORKERS}"
   ) >"${TAU2_SERVICE_LOG}" 2>&1 &
@@ -363,6 +394,7 @@ run_train_eval() {
 }
 
 main() {
+  auto_commit_if_requested
   start_openviking_server
   start_tau2_service
   run_train_eval "${TRAIN_CLI_ARGS[@]}"

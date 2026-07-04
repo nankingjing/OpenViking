@@ -418,9 +418,7 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
         }
     )
 
-    async def fake_get_ov_client(
-        self, session_key, openviking_connection=None, actor_peer_id=None
-    ):
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
         del session_key, openviking_connection, actor_peer_id
         return fake_ov_client
 
@@ -473,9 +471,7 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
         context_payload={"messages": [{"role": "user", "content": "OV user turn"}]}
     )
 
-    async def fake_get_ov_client(
-        self, session_key, openviking_connection=None, actor_peer_id=None
-    ):
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
         del self, session_key, openviking_connection, actor_peer_id
         return fake_ov_client
 
@@ -580,9 +576,7 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
             state["last_synced_local_index"] = len(session.messages) - 1
         return kwargs
 
-    async def fake_get_ov_client(
-        self, session_key, openviking_connection=None, actor_peer_id=None
-    ):
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
         del self, session_key, openviking_connection, actor_peer_id
 
         class _Client:
@@ -685,9 +679,7 @@ async def test_agent_loop_commits_openviking_before_model_when_memory_window_rea
         session.metadata["openviking"]["last_commit_performed"] = bool(kwargs["force_commit"])
         return kwargs
 
-    async def fake_get_ov_client(
-        self, session_key, openviking_connection=None, actor_peer_id=None
-    ):
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
         del self, session_key, openviking_connection, actor_peer_id
 
         class _Client:
@@ -1071,3 +1063,74 @@ async def test_auto_openviking_memory_uses_distinct_tool_name(temp_dir: Path, mo
     assert completed_payload is not None
     assert completed_payload["tool_count"] == 1
     assert completed_payload["tools_used_names"] == ["auto_memory_search"]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_applies_experience_constraint_reminder_once_per_session(
+    temp_dir: Path, monkeypatch
+):
+    from vikingbot.agent.experience_constraints import ConstraintExperience
+
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    class _FakeMemory:
+        async def get_viking_constraint_experiences(self, **_kwargs):
+            return [
+                ConstraintExperience(
+                    uri="viking://user/u/memories/experiences/refund.md",
+                    name="refund_check",
+                    constraint="Verify refund eligibility before refunding.",
+                    trigger_code=(
+                        "def should_trigger(ctx):\n"
+                        '    return ctx.get("candidate_tool") == "refund_order"\n'
+                    ),
+                )
+            ]
+
+    class _FakeContext:
+        memory = _FakeMemory()
+
+    config = Config(storage_workspace=str(temp_dir), agents={})
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+    loop.context = _FakeContext()
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-constraint")
+    response = LLMResponse(
+        content="",
+        tool_calls=[ToolCallRequest("call-1", "refund_order", {"order_id": "1"}, 0)],
+    )
+    tools_used: list[dict] = []
+
+    first_messages = await loop._maybe_apply_experience_constraint_reminder(
+        messages=[{"role": "user", "content": "refund this"}],
+        response=response,
+        session_key=session_key,
+        openviking_connection=None,
+        tools_used=tools_used,
+    )
+
+    assert first_messages is not None
+    assert first_messages[-1]["role"] == "user"
+    assert "下面是一条经验 reminder" in first_messages[-1]["content"]
+    assert (
+        "<triggered_before_tool>refund_order</triggered_before_tool>"
+        in first_messages[-1]["content"]
+    )
+    assert "Verify refund eligibility before refunding." in first_messages[-1]["content"]
+    assert tools_used == []
+
+    second_messages = await loop._maybe_apply_experience_constraint_reminder(
+        messages=first_messages,
+        response=response,
+        session_key=session_key,
+        openviking_connection=None,
+        tools_used=tools_used,
+    )
+
+    assert second_messages is None

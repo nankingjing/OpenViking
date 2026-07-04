@@ -62,6 +62,7 @@ class BatchTrainEvalConfig:
     config_path: str | None = None
     output_path: str | None = None
     keep_default_tools: bool = True
+    loader_mode: str = "constraint"
     max_iterations: int = 30
     server_url: str | None = None
     api_key: str | None = None
@@ -99,6 +100,9 @@ class BatchTrainEvalConfig:
             raise ValueError("batch_size must be > 0")
         if self.concurrency <= 0:
             raise ValueError("concurrency must be > 0")
+        self.loader_mode = str(self.loader_mode or "constraint").strip().lower()
+        if self.loader_mode not in {"skill", "constraint"}:
+            raise ValueError("loader_mode must be skill or constraint")
         if self.max_iterations <= 0:
             raise ValueError("max_iterations must be > 0")
         if self.commit_poll_interval_seconds <= 0:
@@ -329,7 +333,9 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             latest_pointer_path=_latest_rollouts_path(config),
         )
         remote_executor = getattr(pipeline, "rollout_executor", None)
-        if isinstance(remote_executor, (RemoteRolloutExecutor, CachedEpochZeroTrainRolloutExecutor)):
+        if isinstance(
+            remote_executor, (RemoteRolloutExecutor, CachedEpochZeroTrainRolloutExecutor)
+        ):
             remote_executor.on_rollout_complete = (
                 rollout_artifact_recorder.record_rollout_completion
             )
@@ -670,6 +676,7 @@ def _write_baseline_cache(
         "trials": config.trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
+        "loader_mode": config.loader_mode,
         "created_at": datetime.now().isoformat(),
         "report": report,
     }
@@ -741,6 +748,7 @@ def _build_pipeline(
         options={
             "config_path": config.config_path,
             "keep_default_tools": config.keep_default_tools,
+            "loader_mode": config.loader_mode,
             "max_iterations": config.max_iterations,
         },
     )
@@ -1023,6 +1031,7 @@ def _train_rollout_cache_key_prefix(config: BatchTrainEvalConfig) -> str:
         "train_trials": config.train_trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
+        "loader_mode": config.loader_mode,
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
@@ -1040,6 +1049,7 @@ def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
         "trials": config.trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
+        "loader_mode": config.loader_mode,
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]

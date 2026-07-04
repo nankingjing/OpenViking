@@ -27,8 +27,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from benchmark.tau2.train.case_loader import Tau2CaseLoader
 from benchmark.tau2.train.rollout_executor import (
+    DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
     DEFAULT_TAU2_ROLLOUT_BACKEND,
     make_tau2_rollout_executor,
+    normalize_tau2_experience_loader_mode,
     normalize_tau2_rollout_backend,
 )
 from openviking.session.train.components.dataset_service import create_dataset_service_app
@@ -52,6 +54,7 @@ def create_app(
     config_path: str | None = None,
     rollout_language: str = "default",
     rollout_backend: str | None = None,
+    loader_mode: str | None = None,
     max_rollout_concurrency: int | None = None,
     rollout_thread_workers: int | None = None,
 ):
@@ -59,6 +62,11 @@ def create_app(
         raise ValueError("rollout_language must be 'default' or 'zh'")
     default_backend = normalize_tau2_rollout_backend(
         rollout_backend or os.getenv("TAU2_ROLLOUT_BACKEND") or DEFAULT_TAU2_ROLLOUT_BACKEND
+    )
+    default_loader_mode = normalize_tau2_experience_loader_mode(
+        loader_mode
+        or os.getenv("TAU2_EXPERIENCE_LOADER_MODE")
+        or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
     )
 
     def make_case_loader(
@@ -86,6 +94,7 @@ def create_app(
                 **options,
                 "show_progress": options.get("show_progress", False),
                 "progress_label": options.get("progress_label") or "tau2",
+                "loader_mode": options.get("loader_mode") or default_loader_mode,
             },
             config_path=config_path,
             concurrency=1,
@@ -128,6 +137,12 @@ def parse_args() -> argparse.Namespace:
         choices=["native", "vikingbot"],
         default=os.getenv("TAU2_ROLLOUT_BACKEND", DEFAULT_TAU2_ROLLOUT_BACKEND),
         help="Rollout implementation backend (default: native).",
+    )
+    parser.add_argument(
+        "--loader-mode",
+        choices=["skill", "constraint"],
+        default=os.getenv("TAU2_EXPERIENCE_LOADER_MODE", DEFAULT_TAU2_EXPERIENCE_LOADER_MODE),
+        help="Experience loading mode for vikingbot rollouts (default: constraint).",
     )
     parser.add_argument(
         "--native-thread-workers",
@@ -197,6 +212,7 @@ def main() -> None:
         config_path=args.config,
         rollout_language=args.rollout_language,
         rollout_backend=args.rollout_backend,
+        loader_mode=args.loader_mode,
         max_rollout_concurrency=args.max_rollout_concurrency,
         rollout_thread_workers=(
             None if args.rollout_thread_workers == 0 else args.rollout_thread_workers

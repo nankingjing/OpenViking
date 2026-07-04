@@ -58,7 +58,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
-        return f"""You are a memory extraction agent. Your job is to distill experience memories from agent execution trajectories.
+        return f"""You are a memory extraction agent. Your job is to distill experience memories from failed or partially failed agent execution trajectories.
 
 You are given:
 - A new trajectory (the latest agent execution to incorporate)
@@ -68,11 +68,15 @@ The source trajectories are for reference only — do NOT include or modify them
 
 ## What to output
 
-For each distinct user intent in the trajectory, output a SEPARATE experience entry. A single trajectory may contain multiple user intents — you MUST produce one entry per intent, not one entry for the whole trajectory.
+Output experience entries ONLY for reusable failure repairs. An experience is a pre-tool reminder that prevents or recovers from the first materially reward-changing mistake. It is not a full business workflow, not a success-path SOP, and not a record of every user intent.
+
+For each distinct reusable failure pattern in the trajectory, output a SEPARATE experience entry. If the trajectory contains no reusable failure repair, output no experience changes.
 
 Each entry:
 - `experience_name`: the name of the experience (new or existing)
-- `content`: the full experience content (rewrite holistically, incorporating old + new)
+- `content`: the full failure-repair reminder content (rewrite holistically, incorporating old + new)
+- `trigger_code`: restricted Python code defining `should_trigger(ctx) -> bool`; it decides when
+  this repair reminder should be injected before a candidate tool call.
 - `supersedes`: the `experience_name` of an older experience this one replaces — set ONLY when the new name is genuinely different and broader. Leave empty otherwise.
 
 The system handles create vs update automatically:
@@ -80,11 +84,29 @@ The system handles create vs update automatically:
 - New `experience_name` → creates a new experience
 - `supersedes` set → old experience is deleted and its history is inherited
 
+## Decision rules
+
+Before outputting any experience, decide which case applies:
+- Existing experience is correct but the agent ignored it → skip unless wording/trigger is clearly too weak to be usable.
+- Existing experience is misleading, over-broad, or caused the bad path → update it to narrow the trigger and repair wording.
+- No relevant experience exists and the failure has a reusable pre-tool repair → create a new experience.
+- The failure is case-specific, random, already solved by tool facts, or not preventable by a pre-tool reminder → skip.
+
 ## Rules
 
-- **One experience per distinct user intent.** If a trajectory covers N different user goals (e.g., cancel + modify + add baggage), output N separate entries — never merge them into one.
-- **Split over merge.** When in doubt whether two patterns belong together, split them. Only merge with an existing experience when it covers the EXACT same user intent and tool sequence.
+- **Failure repair only.** Do not output a generic positive workflow merely because the trajectory contains a recognizable user intent.
+- **One experience per distinct failure pattern.** If a trajectory covers multiple mistakes, output one entry per reusable mistake — never merge them into an umbrella flow.
+- **Split over merge.** When in doubt whether two repair patterns belong together, split them. Only merge with an existing experience when it covers the EXACT same failure pattern and tool/communication boundary.
+- **Preserve object boundaries.** Do not create a repair that changes object cardinality, lifecycle shape, passenger/object membership, or target object unless the user explicitly requested and confirmed that change and the tool/policy supports it.
+- **Reward-critical communication counts.** If the failure was a missing confirmation, missing final required fact, or wrong user-visible policy explanation, the experience may target `communicate_with_user`; do not strip those steps.
 - **Consistent naming language.** All `experience_name` values in one output must use the same language.
+- **Constraint trigger required.** Every experience MUST include `trigger_code`. The trigger MUST
+  be a narrow multi-stage gate: first filter by `ctx.get("candidate_tool")`, then require a positive
+  failure-risk match using compact `ctx.get("messages", [])` and/or `ctx.get("candidate_tool_args", {{}})`,
+  and include negative gates for nearby non-applicable intents or incompatible tool args.
+  Return False immediately for unrelated tools. Prefer `regex_search(pattern, text)` or
+  `regex_match(pattern, text)` for natural-language intent checks; do not import `re`. The function
+  MUST return bool and must not import modules, read files, call external APIs, or mutate global state.
 - **Do NOT use `delete_ids`** for experience operations — use `supersedes` instead.
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.
@@ -272,8 +294,8 @@ All memory content must be written in {output_language}.
                         "Treat `new_trajectory` as the new execution to incorporate.",
                         "Treat `candidate_experience` as existing memories you may update, replace, or skip.",
                         "Treat `candidate_source_trajectory` as reference-only context for understanding a candidate experience; do not modify it directly.",
-                        "Based on the above, decide whether to **Update**, **Replace**, **Create**, or **Skip**. Output JSON only.",
-                        "A single trajectory covering multiple user intents MUST produce multiple entries.",
+                        "Based on the above, decide whether to **Update**, **Replace**, **Create**, or **Skip** a failure-repair experience. Output JSON only.",
+                        "Only reusable failure patterns should produce entries; successful or unrelated intents should produce no experience changes.",
                     ]
                 ),
             }

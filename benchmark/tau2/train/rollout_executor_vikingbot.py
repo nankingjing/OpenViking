@@ -11,22 +11,19 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from benchmark.tau2.train._rollout_helpers import (
     _as_tool_input,
     _case_trial,
-    _communicate_text_from_tool_input,
-    _is_communicate_with_user,
     _message,
-    _metadata_message,
     _stringify,
     _to_jsonable,
 )
 from benchmark.tau2.train._rollout_helpers import (
     _tau2_evaluation as _tau2_evaluation_helper,
 )
-from openviking.message import Message, ToolPart
+from openviking.message import Message, TextPart, ToolPart
 from openviking.session.train import (
     Case,
     ExecutionContext,
@@ -37,6 +34,16 @@ from openviking.session.train import (
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+Tau2ExperienceLoaderMode = Literal["skill", "constraint"]
+DEFAULT_TAU2_EXPERIENCE_LOADER_MODE: Tau2ExperienceLoaderMode = "constraint"
+
+
+def normalize_tau2_experience_loader_mode(value: Any) -> Tau2ExperienceLoaderMode:
+    mode = str(value or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE).strip().lower()
+    if mode not in {"skill", "constraint"}:
+        raise ValueError("loader_mode must be 'skill' or 'constraint'")
+    return mode  # type: ignore[return-value]
 
 
 def _tau2_policy_current_time_match(policy: str) -> re.Match[str] | None:
@@ -560,10 +567,12 @@ class VikingBotTau2RolloutExecutor:
     max_iterations: int = 30
     log_timings: bool = True
     rollout_language: str = "default"
+    loader_mode: Tau2ExperienceLoaderMode = DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
 
     def __post_init__(self) -> None:
         if self.rollout_language not in {"default", "zh"}:
             raise ValueError("rollout_language must be 'default' or 'zh'")
+        self.loader_mode = normalize_tau2_experience_loader_mode(self.loader_mode)
 
     async def execute(
         self,
@@ -615,6 +624,7 @@ class VikingBotTau2RolloutExecutor:
             agent,
             provider,
             keep_default_tools=self.keep_default_tools,
+            loader_mode=self.loader_mode,
             record_tool_timing=timings.record_tool,
             task_id=task_id,
             task_no=task_no,
@@ -627,6 +637,7 @@ class VikingBotTau2RolloutExecutor:
             provider.policy,
             keep_default_tools=self.keep_default_tools,
             rollout_language=self.rollout_language,
+            loader_mode=self.loader_mode,
         )
         user_prompt = provider.user_query
         SessionKey = _vikingbot_imports()["SessionKey"]
@@ -648,6 +659,7 @@ class VikingBotTau2RolloutExecutor:
             memory_content,
             experience_reminder,
             experience_loader_skill,
+            runtime_messages,
         ) = await _run_agent(
             agent=agent,
             system_prompt=system_prompt,
@@ -655,6 +667,7 @@ class VikingBotTau2RolloutExecutor:
             session_key=session_key,
             sender_id="tau2_user",
             keep_default_tools=self.keep_default_tools,
+            loader_mode=self.loader_mode,
             timings=timings,
             case_lookup=_tau2_case_lookup(case),
         )
@@ -690,6 +703,7 @@ class VikingBotTau2RolloutExecutor:
                 evaluation_result=evaluation_result,
                 reward=reward,
                 experience_reminder=experience_reminder,
+                runtime_messages=runtime_messages,
                 artifact_created_at=_tau2_policy_current_time_iso(system_prompt),
             ),
             policy_snapshot_id=context.policy_snapshot_id,
@@ -718,6 +732,7 @@ class VikingBotTau2RolloutExecutor:
                 "keep_default_tools": self.keep_default_tools,
                 "ov_tools_enable": False,
                 "experience_recall_enable": self.keep_default_tools,
+                "experience_loader_mode": self.loader_mode,
                 "experience_loader_skill": experience_loader_skill,
                 "execution_metadata": dict(context.metadata),
             },
@@ -777,6 +792,7 @@ def _tau2_case_lookup(case: Case) -> dict[str, Any]:
             "input.task_id": task_id,
         },
     }
+
 
 
 def _append_final_answer_for_tau2_evaluation(provider_env: Any, final_content: str | None) -> None:
@@ -922,6 +938,7 @@ def _configure_tools(
     provider: Any,
     *,
     keep_default_tools: bool,
+    loader_mode: Tau2ExperienceLoaderMode = DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
     record_tool_timing: Callable[[str, float], None] | None = None,
     task_id: str | None = None,
     task_no: int | None = None,
@@ -931,11 +948,13 @@ def _configure_tools(
     # restricted to automatic experience recall during prompt construction.
     # No openviking_* tool should be callable by the agent.
     del keep_default_tools
+    loader_mode = normalize_tau2_experience_loader_mode(loader_mode)
     for tool_name in list(agent.tools.tool_names):
         if str(tool_name).startswith("openviking_"):
             agent.tools.unregister(tool_name)
-    agent.tools.register(_make_search_experience_tool())
-    agent.tools.register(_make_read_experience_tool())
+    if loader_mode == "skill":
+        agent.tools.register(_make_search_experience_tool())
+        agent.tools.register(_make_read_experience_tool())
     tool_lock = _AsyncRWLock()
     write_tool_names = _classify_write_tools(provider)
     for schema in provider.list_openai_tools():
@@ -1028,22 +1047,36 @@ def _classify_write_tools(provider: Any) -> set[str]:
     return write_names
 
 
-def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_language: str) -> str:
+def _build_system_prompt(
+    policy: str,
+    *,
+    keep_default_tools: bool,
+    rollout_language: str,
+    loader_mode: Tau2ExperienceLoaderMode = DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
+) -> str:
     del keep_default_tools
+    loader_mode = normalize_tau2_experience_loader_mode(loader_mode)
     instructions = []
     if policy:
         instructions.append(policy)
     instructions.append("Use the provided tools to interact with the environment.")
-    instructions.append(
-        "Before taking task actions, you MUST use the required `experience_loader` skill. "
-        "It explains how to search OpenViking case memories with the `search_experience` tool, return linked experience URIs, and read selected experiences using the `read_experience` tool."
-    )
-    instructions.append(
-        "Loaded experiences are guidance from prior training runs. "
-        "Use them only when their situation and applicability boundaries match the current "
-        "task; current policy, current tool results, and current user facts override prior "
-        "experience."
-    )
+    if loader_mode == "skill":
+        instructions.append(
+            "Before taking task actions, you MUST use the required `experience_loader` skill. "
+            "It explains how to search OpenViking case memories with the `search_experience` tool, return linked experience URIs, and read selected experiences using the `read_experience` tool."
+        )
+        instructions.append(
+            "Loaded experiences are guidance from prior training runs. "
+            "Use them only when their situation and applicability boundaries match the current "
+            "task; current policy, current tool results, and current user facts override prior "
+            "experience."
+        )
+    else:
+        instructions.append(
+            "Experience constraints may be injected automatically as reminder messages before "
+            "tool calls. Treat those reminders as prior-run guidance, but current policy, "
+            "current tool results, and current user facts override prior experience."
+        )
     if rollout_language == "zh":
         instructions.append(
             "Communicate with the user and write the final response in Chinese. "
@@ -1196,21 +1229,25 @@ async def _run_agent(
     session_key: Any,
     sender_id: str,
     keep_default_tools: bool,
+    loader_mode: Tau2ExperienceLoaderMode = DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
     timings: "_RolloutTiming | None" = None,
     case_lookup: dict[str, Any] | None = None,
 ):
     stage_started_at = time.perf_counter()
+    loader_mode = normalize_tau2_experience_loader_mode(loader_mode)
     message_context = agent.context
     del case_lookup
-    message_context = await _prepare_experience_loader_skill(
-        agent=agent,
-        session_key=session_key,
-    )
-    experience_loader_skill = getattr(
-        message_context,
-        "latest_experience_loader_skill_content",
-        None,
-    )
+    experience_loader_skill = None
+    if loader_mode == "skill":
+        message_context = await _prepare_experience_loader_skill(
+            agent=agent,
+            session_key=session_key,
+        )
+        experience_loader_skill = getattr(
+            message_context,
+            "latest_experience_loader_skill_content",
+            None,
+        )
     messages = await message_context.build_messages(
         history=[],
         current_message=user_prompt,
@@ -1273,6 +1310,7 @@ async def _run_agent(
     if timings is not None:
         timings.record("agent_loop", stage_started_at)
     final_content, final_reasoning_content, tools_used, token_usage, iteration = result
+    runtime_messages = list(getattr(result, "messages", []) or [])
     if required_skill_tool is not None:
         tools_used = [required_skill_tool, *tools_used]
     case_memory_context = _case_memory_context_from_tools(tools_used)
@@ -1289,6 +1327,7 @@ async def _run_agent(
         memory_content,
         experience_reminder_text,
         experience_loader_skill,
+        runtime_messages,
     )
 
 
@@ -1489,75 +1528,67 @@ def _build_rollout_messages(
     evaluation_result: Any,
     reward: Any,
     experience_reminder: str | None = None,
+    runtime_messages: list[dict[str, Any]] | None = None,
     artifact_created_at: str | None = None,
 ) -> list[Message]:
-    messages = [
-        _metadata_message(
-            "tau2-system",
-            f"system:\n{system_prompt}",
-            created_at=artifact_created_at,
-        ),
-    ]
-    # Experience Reminder 放在 system 之后、user 之前，与 agent 实际看到的顺序一致
-    if experience_reminder:
-        messages.append(
-            _message("tau2-experience", "user", experience_reminder, created_at=artifact_created_at)
+    del system_prompt, user_prompt, tools_used, experience_reminder
+    if not runtime_messages:
+        raise ValueError("runtime_messages are required; tau2 artifacts must use AgentLoop messages")
+    return _build_rollout_messages_from_runtime(
+        runtime_messages,
+        final_content=final_content,
+        evaluation_result=evaluation_result,
+        reward=reward,
+        artifact_created_at=artifact_created_at,
+    )
+
+
+def _build_rollout_messages_from_runtime(
+    runtime_messages: list[dict[str, Any]],
+    *,
+    final_content: str | None,
+    evaluation_result: Any,
+    reward: Any,
+    artifact_created_at: str | None = None,
+) -> list[Message]:
+    """Convert AgentLoop's real runtime messages into rollout artifact messages.
+
+    AgentLoop runtime messages are the source of truth for dynamic user-message
+    injections such as experience constraints.  The conversion keeps natural
+    user/assistant text in order and renders provider tool-result messages as
+    completed OpenViking ToolPart entries.
+    """
+
+    messages: list[Message] = []
+    tool_inputs_by_id: dict[str, dict[str, Any]] = {}
+    for raw in runtime_messages or []:
+        if not isinstance(raw, dict):
+            continue
+        for call in raw.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id") or "")
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
+            if call_id:
+                tool_inputs_by_id[call_id] = _as_tool_input(function.get("arguments", {}))
+
+    for idx, raw in enumerate(runtime_messages or []):
+        msg = _runtime_message_to_rollout_message(
+            raw,
+            idx=idx,
+            tool_inputs_by_id=tool_inputs_by_id,
+            artifact_created_at=artifact_created_at,
         )
-    messages.append(_message("tau2-user", "user", user_prompt, created_at=artifact_created_at))
-    if isinstance(tools_used, list):
-        for idx, tool_info in enumerate(tools_used):
-            if not isinstance(tool_info, dict):
-                continue
-            tool_name = str(tool_info.get("tool_name") or "unknown")
-            if not tool_name or tool_name == "unknown" and not tool_info.get("result"):
-                continue
-            args = tool_info.get("args", "")
-            tool_input = _as_tool_input(args)
-            result = tool_info.get("result")
-            has_result = result is not None
-            if _is_communicate_with_user(tool_name):
-                assistant_text = _communicate_text_from_tool_input(tool_input)
-                if assistant_text.strip():
-                    messages.append(
-                        _message(
-                            f"tau2-communicate-assistant-{idx}",
-                            "assistant",
-                            assistant_text,
-                            created_at=artifact_created_at,
-                        )
-                    )
-                if has_result:
-                    user_text = _stringify(result)
-                    if user_text.strip():
-                        messages.append(
-                            _message(
-                                f"tau2-communicate-user-{idx}",
-                                "user",
-                                user_text,
-                                created_at=artifact_created_at,
-                            )
-                        )
-                continue
-            messages.append(
-                Message(
-                    id=f"tau2-tool-{idx}",
-                    role="user" if has_result else "assistant",
-                    parts=[
-                        ToolPart(
-                            tool_id=f"tau2-tool-{idx}",
-                            tool_name=tool_name,
-                            tool_input=tool_input,
-                            tool_output=_stringify(result) if has_result else "",
-                            tool_status="completed" if has_result else "running",
-                        )
-                    ],
-                    created_at=artifact_created_at,
-                )
-            )
+        if msg is not None:
+            messages.append(msg)
+
     if final_content and str(final_content).strip():
-        messages.append(
-            _message("tau2-final", "assistant", str(final_content), created_at=artifact_created_at)
-        )
+        final_text = str(final_content)
+        if not any(message.role == "assistant" and message.content == final_text for message in messages):
+            messages.append(
+                _message("tau2-final", "assistant", final_text, created_at=artifact_created_at)
+            )
+
     reward_jsonable = _to_jsonable(reward)
     evaluation_jsonable = _to_jsonable(evaluation_result)
     success = reward_jsonable == 1 or reward_jsonable == 1.0
@@ -1571,6 +1602,77 @@ def _build_rollout_messages(
         )
     )
     return messages
+
+
+def _runtime_message_to_rollout_message(
+    raw: dict[str, Any],
+    *,
+    idx: int,
+    tool_inputs_by_id: dict[str, dict[str, Any]],
+    artifact_created_at: str | None,
+) -> Message | None:
+    role = str(raw.get("role") or "user")
+    content = raw.get("content")
+
+    if role == "system":
+        return _message(
+            f"tau2-runtime-{idx}",
+            "user",
+            f"system:\n{_runtime_content_to_text(content)}",
+            created_at=artifact_created_at,
+        )
+
+    if role == "tool":
+        tool_call_id = str(raw.get("tool_call_id") or f"tau2-runtime-tool-{idx}")
+        tool_name = str(raw.get("name") or raw.get("tool_name") or "unknown")
+        return Message(
+            id=f"tau2-runtime-{idx}",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id=tool_call_id,
+                    tool_name=tool_name,
+                    tool_input=tool_inputs_by_id.get(tool_call_id, {}),
+                    tool_output=_runtime_content_to_text(content),
+                    tool_status="completed",
+                )
+            ],
+            created_at=artifact_created_at,
+        )
+
+    if role not in {"user", "assistant"}:
+        role = "user"
+
+    # Assistant tool-call messages are represented by the following completed
+    # tool result message.  Keep assistant natural-language content only.
+    if raw.get("tool_calls") and not str(content or "").strip():
+        return None
+
+    text = _runtime_content_to_text(content)
+    if not text.strip():
+        return None
+    return Message(
+        id=f"tau2-runtime-{idx}",
+        role=role,  # type: ignore[arg-type]
+        parts=[TextPart(text=text)],
+        created_at=artifact_created_at,
+    )
+
+
+def _runtime_content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(str(item.get("text") or ""))
+            else:
+                texts.append(_stringify(item))
+        return "\n".join(text for text in texts if text)
+    return _stringify(content)
 
 
 def _tau2_evaluation(*, reward: Any, evaluation_result: Any) -> RubricEvaluation:

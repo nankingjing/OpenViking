@@ -285,7 +285,9 @@ class TrajectoryRolloutAnalyzer:
             isolation_handler=isolation_handler,
         )
 
-    @tracer("train.rollout_analyzer.trajectory.read_trajectories", ignore_result=True, ignore_args=True)
+    @tracer(
+        "train.rollout_analyzer.trajectory.read_trajectories", ignore_result=True, ignore_args=True
+    )
     async def _read_trajectories(
         self,
         trajectory_uris: list[str],
@@ -327,11 +329,9 @@ class TrajectoryRolloutAnalyzer:
         return trajectories
 
 
-
 def _log_operations(operations: ResolvedOperations) -> None:
     op_items = [
-        f"{op.memory_type}(uris={op.uris!r})"
-        for op in getattr(operations, "upsert_operations", [])
+        f"{op.memory_type}(uris={op.uris!r})" for op in getattr(operations, "upsert_operations", [])
     ]
     delete_uris = [dc.uri for dc in getattr(operations, "delete_file_contents", [])]
     tracer.info(f"[trajectory] LLM operations: ops={op_items}, delete_uris={delete_uris}")
@@ -404,8 +404,7 @@ def _evaluation_feedback_message(evaluation: RubricEvaluation) -> Message:
     evidence_lines: list[str] = []
     for criterion in evaluation.criterion_results:
         criterion_lines.append(
-            f"- {criterion.criterion_name}: "
-            f"passed={criterion.passed}, score={criterion.score}"
+            f"- {criterion.criterion_name}: passed={criterion.passed}, score={criterion.score}"
         )
         criterion_lines.extend(f"  feedback: {item}" for item in criterion.feedback)
         evidence_lines.extend(criterion.evidence)
@@ -424,24 +423,17 @@ def _split_operations_by_type(
     operations: ResolvedOperations, *, target_type: str
 ) -> tuple[ResolvedOperations, ResolvedOperations]:
     """Split operations into (target_type_ops, other_ops)."""
-    target_upserts = [
-        op for op in operations.upsert_operations if op.memory_type == target_type
-    ]
-    other_upserts = [
-        op for op in operations.upsert_operations if op.memory_type != target_type
-    ]
-    target_deletes = [
-        dc for dc in operations.delete_file_contents if dc.memory_type == target_type
-    ]
-    other_deletes = [
-        dc for dc in operations.delete_file_contents if dc.memory_type != target_type
-    ]
+    target_upserts = [op for op in operations.upsert_operations if op.memory_type == target_type]
+    other_upserts = [op for op in operations.upsert_operations if op.memory_type != target_type]
+    target_deletes = [dc for dc in operations.delete_file_contents if dc.memory_type == target_type]
+    other_deletes = [dc for dc in operations.delete_file_contents if dc.memory_type != target_type]
     target_ops = ResolvedOperations(
         upsert_operations=target_upserts,
         delete_file_contents=target_deletes,
         errors=list(operations.errors),
         resolved_links=[
-            link for link in operations.resolved_links
+            link
+            for link in operations.resolved_links
             if getattr(link, "from_uri", "").endswith("/trajectories/")
             or target_type in getattr(link, "from_uri", "")
         ],
@@ -497,9 +489,7 @@ def _skill_operations_to_gradients(
                 stored = link if isinstance(link, StoredLink) else StoredLink(**dict(link))
                 if stored.link_type == "derived_from" and stored.to_uri:
                     if "/memories/trajectories/" in stored.to_uri:
-                        links.append(
-                            stored.model_copy(update={"from_uri": target_uri or ""})
-                        )
+                        links.append(stored.model_copy(update={"from_uri": target_uri or ""}))
             except Exception:
                 continue
 

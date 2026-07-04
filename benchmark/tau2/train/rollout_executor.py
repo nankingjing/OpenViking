@@ -13,13 +13,15 @@ from benchmark.tau2.train._rollout_helpers import (
     _to_jsonable,
 )
 from benchmark.tau2.train.rollout_executor_native import NativeTau2RolloutExecutor
-from benchmark.tau2.train.rollout_executor_vikingbot import (
-    Tau2RolloutExecutor as VikingBotTau2RolloutExecutor,
-)
 from benchmark.tau2.train.rollout_executor_vikingbot import (  # re-export vikingbot-only helpers for tests
+    DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
     _append_final_answer_for_tau2_evaluation,
     _build_rollout_messages,
     _configure_tools,
+    normalize_tau2_experience_loader_mode,
+)
+from benchmark.tau2.train.rollout_executor_vikingbot import (
+    Tau2RolloutExecutor as VikingBotTau2RolloutExecutor,
 )
 
 Tau2RolloutBackend = Literal["native", "vikingbot"]
@@ -52,6 +54,9 @@ def make_tau2_rollout_executor(
             keep_default_tools=_bool_option(opts.get("keep_default_tools"), default=True),
             max_iterations=int(opts.get("max_iterations") or 30),
             rollout_language=str(opts.get("rollout_language") or rollout_language),
+            loader_mode=normalize_tau2_experience_loader_mode(
+                opts.get("loader_mode") or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
+            ),
         )
     return NativeTau2RolloutExecutor(
         concurrency=concurrency,
@@ -98,7 +103,6 @@ def make_tau2_rollout_executor(
 Tau2RolloutExecutor = NativeTau2RolloutExecutor
 
 
-
 def _bool_option(value: Any, *, default: bool) -> bool:
     if value is None:
         return default
@@ -112,6 +116,7 @@ def _bool_option(value: Any, *, default: bool) -> bool:
             return False
         raise ValueError(f"Invalid boolean option: {value!r}")
     return bool(value)
+
 
 def _dict_option(value: Any) -> dict[str, Any]:
     if value is None:
@@ -142,12 +147,14 @@ def _optional_str(value: Any) -> str | None:
 
 
 __all__ = [
+    "DEFAULT_TAU2_EXPERIENCE_LOADER_MODE",
     "DEFAULT_TAU2_ROLLOUT_BACKEND",
     "NativeTau2RolloutExecutor",
     "Tau2RolloutBackend",
     "Tau2RolloutExecutor",
     "VikingBotTau2RolloutExecutor",
     "make_tau2_rollout_executor",
+    "normalize_tau2_experience_loader_mode",
     "normalize_tau2_rollout_backend",
     "_append_final_answer_for_tau2_evaluation",
     "_as_tool_input",

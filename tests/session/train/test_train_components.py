@@ -23,6 +23,10 @@ from openviking.session.train import (
     PolicyUpdatePlan,
 )
 
+DEFAULT_TRIGGER_CODE = (
+    'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "test_tool"\n'
+)
+
 
 class FakeVikingFS:
     def __init__(self, files: dict[str, str]):
@@ -75,6 +79,7 @@ def _experience_set() -> ExperienceSet:
                 version=1,
                 status="production",
                 content="content",
+                metadata={"trigger_code": DEFAULT_TRIGGER_CODE},
             )
         ],
     )
@@ -92,6 +97,7 @@ def _memory_file(
         "memory_type": "experiences",
         "experience_name": name,
         "status": status,
+        "trigger_code": DEFAULT_TRIGGER_CODE,
     }
     if version is not None:
         fields["version"] = version
@@ -124,7 +130,8 @@ def _patch_gradient(
         after_file=_memory_file(name=name, uri=uri, content=after, version=base_version),
         base_version=base_version,
         rationale=rationale,
-        links=links or [
+        links=links
+        or [
             StoredLink(
                 from_uri=uri or "",
                 to_uri="viking://user/u/memories/trajectories/traj1.md",
@@ -160,7 +167,14 @@ def _plan_item_from_gradient(gradient: PatchSemanticGradient):
         base_version=gradient.base_version,
         confidence=gradient.confidence,
         links=list(gradient.links),
-        metadata={"rationale": gradient.rationale},
+        metadata={
+            "rationale": gradient.rationale,
+            "merge_memory_fields": {
+                key: value
+                for key, value in (gradient.after_file.extra_fields or {}).items()
+                if key != "content"
+            },
+        },
     )
 
 
@@ -256,7 +270,9 @@ async def test_dry_run_policy_updater_does_not_mutate_policy_set():
 @pytest.mark.asyncio
 async def test_dry_run_policy_updater_simulates_patch_plan_items():
     policy_set = _experience_set()
-    gradient = _patch_gradient(uri=policy_set.policies[0].uri, before="content", after="new content")
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri, before="content", after="new content"
+    )
     plan = _plan_from_gradient(gradient)
 
     result = await DryRunPolicyUpdater().apply(plan, policy_set)
@@ -288,7 +304,9 @@ async def test_dry_run_policy_updater_simulates_delete_plan_items():
 async def test_memory_file_policy_updater_writes_experience_files():
     policy_set = _experience_set()
     fs = FakeVikingFS({})
-    gradient = _patch_gradient(uri=policy_set.policies[0].uri, before="content", after="new content")
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri, before="content", after="new content"
+    )
     plan = _plan_from_gradient(gradient)
 
     result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
@@ -311,7 +329,9 @@ async def test_memory_file_policy_updater_vectorizes_written_experience_files():
     policy_set = _experience_set()
     fs = FakeVikingFS({})
     vikingdb = FakeVikingDB()
-    gradient = _patch_gradient(uri=policy_set.policies[0].uri, before="content", after="new content")
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri, before="content", after="new content"
+    )
     plan = _plan_from_gradient(gradient)
 
     from openviking.server.identity import RequestContext, Role
@@ -483,7 +503,9 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         [gradient],
@@ -581,7 +603,9 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         gradients,
@@ -683,7 +707,9 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         gradients,
@@ -699,7 +725,9 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
 
 
 @pytest.mark.asyncio
-async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all_source_links(monkeypatch):
+async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all_source_links(
+    monkeypatch,
+):
     from openviking.session.memory.dataclass import (
         ResolvedOperation,
         ResolvedOperations,
@@ -764,7 +792,9 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         gradients,
@@ -828,7 +858,9 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         [gradient],
@@ -839,3 +871,167 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
     assert captured["constructed"] is True
     assert plan.metadata["patch_gradient_count"] == 1
     assert plan.items[0].after_content == "merged update"
+
+
+def test_experience_memory_schema_includes_constraint_trigger_fields():
+    from openviking.session.memory.memory_type_registry import create_default_registry
+
+    schema = create_default_registry().get("experiences")
+
+    assert schema is not None
+    fields = {field.name: field for field in schema.fields}
+    assert "trigger_code" in fields
+    assert "should_trigger(ctx)" in fields["trigger_code"].description
+    assert schema.content_template is not None
+    assert "# Experience Trigger" in schema.content_template
+
+
+def test_experience_content_template_renders_markdown_trigger_section():
+    from openviking.session.memory.dataclass import MemoryFile
+    from openviking.session.memory.memory_type_registry import create_default_registry
+    from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+    schema = create_default_registry().get("experiences")
+    rendered = MemoryFileUtils.write(
+        MemoryFile(
+            uri="viking://user/u/memories/experiences/refund.md",
+            content="## Situation\n- Refund request",
+            memory_type="experiences",
+            extra_fields={
+                "memory_type": "experiences",
+                "experience_name": "refund_check",
+                "trigger_code": DEFAULT_TRIGGER_CODE,
+            },
+        ),
+        content_template=schema.content_template,
+    )
+
+    assert "# Experience Trigger" in rendered
+    assert "- experience_name: refund_check" in rendered
+    assert "```python" in rendered
+    assert DEFAULT_TRIGGER_CODE.strip() in rendered
+
+
+@pytest.mark.asyncio
+async def test_memory_file_policy_updater_persists_valid_trigger_code_from_merge_fields():
+    from openviking.session.train import PolicyPlanItem
+
+    policy_set = _experience_set()
+    fs = FakeVikingFS({})
+    trigger_code = (
+        'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "refund_order"\n'
+    )
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name="booking_duplicate_handling",
+                target_uri=policy_set.policies[0].uri,
+                before_content="content",
+                after_content="new content",
+                base_version=1,
+                metadata={
+                    "merge_memory_fields": {
+                        "experience_name": "booking_duplicate_handling",
+                        "trigger_code": trigger_code,
+                        "content": "new content",
+                    }
+                },
+            )
+        ]
+    )
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan,
+        policy_set,
+        fake_request_context(),
+    )
+
+    assert result.errors == []
+    written = fs.files[policy_set.policies[0].uri]
+    assert '"trigger_code":' in written
+    assert "should_trigger" in written
+
+
+@pytest.mark.asyncio
+async def test_memory_file_policy_updater_skips_invalid_trigger_code_patch():
+    from openviking.session.train import PolicyPlanItem
+
+    policy_set = _experience_set()
+    fs = FakeVikingFS({})
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name="booking_duplicate_handling",
+                target_uri=policy_set.policies[0].uri,
+                before_content="content",
+                after_content="new content",
+                base_version=1,
+                metadata={
+                    "merge_memory_fields": {
+                        "experience_name": "booking_duplicate_handling",
+                        "trigger_code": "import os\ndef should_trigger(ctx):\n    return True\n",
+                    }
+                },
+            )
+        ]
+    )
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan,
+        policy_set,
+        fake_request_context(),
+    )
+
+    assert result.written_uris == []
+    assert policy_set.policies[0].uri not in fs.files
+    assert any("invalid trigger_code" in error for error in result.errors)
+    assert result.updated_policy_set is policy_set
+
+
+@pytest.mark.asyncio
+async def test_memory_file_policy_updater_requires_trigger_code_for_experience_writes():
+    from openviking.session.train import PolicyPlanItem
+
+    policy_set = ExperienceSet(
+        root_uri="viking://user/u/memories/experiences",
+        policies=[
+            Experience(
+                name="legacy_experience",
+                uri="viking://user/u/memories/experiences/legacy_experience.md",
+                version=1,
+                status="production",
+                content="content",
+                metadata={},
+            )
+        ],
+    )
+    fs = FakeVikingFS({})
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name="legacy_experience",
+                target_uri=policy_set.policies[0].uri,
+                before_content="content",
+                after_content="new content",
+                base_version=1,
+                metadata={},
+            )
+        ]
+    )
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan,
+        policy_set,
+        fake_request_context(),
+    )
+
+    assert result.written_uris == []
+    assert policy_set.policies[0].uri not in fs.files
+    assert any("missing trigger_code for legacy_experience" in error for error in result.errors)
+    assert result.updated_policy_set is policy_set

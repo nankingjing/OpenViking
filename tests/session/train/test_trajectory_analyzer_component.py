@@ -137,9 +137,9 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     assert created_loop._transaction_handle is None
     provider = created_loop.kwargs["context_provider"]
     assert provider._transaction_handle is None
-    assert [schema.memory_type for schema in provider.get_memory_schemas(context.request_context)] == [
-        "trajectories"
-    ]
+    assert [
+        schema.memory_type for schema in provider.get_memory_schemas(context.request_context)
+    ] == ["trajectories"]
     assert len(fs.writes) == 1
     assert fs.writes[0][0] == "viking://user/u/memories/trajectories/task_20260607120000.md"
     assert '"case_name": "case"' in fs.writes[0][1]

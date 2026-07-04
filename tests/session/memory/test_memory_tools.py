@@ -4,6 +4,8 @@
 Tests for memory tools.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role, ToolContext
@@ -13,6 +15,7 @@ from openviking.session.memory.tools import (
     MemoryLsTool,
     MemoryReadTool,
     MemorySearchTool,
+    add_tool_call_pair_to_messages,
     get_tool,
     get_tool_schemas,
 )
@@ -21,6 +24,20 @@ from openviking_cli.session.user_id import UserIdentifier
 
 class TestMemoryTools:
     """Tests for memory tools."""
+
+    def test_add_tool_call_pair_serializes_datetime_results(self):
+        messages = []
+
+        add_tool_call_pair_to_messages(
+            messages=messages,
+            call_id="call-1",
+            tool_name="read",
+            params={"uri": "viking://user/u/memories/experiences/test.md"},
+            result={"updated_at": datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)},
+        )
+
+        assert messages[0]["role"] == "user"
+        assert '"updated_at": "2026-07-03T12:00:00+00:00"' in messages[0]["content"]
 
     def test_read_tool_properties(self):
         """Test MemoryReadTool properties."""

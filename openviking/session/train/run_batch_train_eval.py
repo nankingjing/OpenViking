@@ -37,10 +37,18 @@ def parse_args() -> argparse.Namespace:
         help="Concurrent OpenViking session.commit submissions during train (default: 200)",
     )
     parser.add_argument("--config", default=None, help="ov.conf path (optional)")
-    parser.add_argument("--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf")
-    parser.add_argument("--api-key", default=None, help="OpenViking API key. Defaults to ov.conf/ovcli.conf")
-    parser.add_argument("--account-id", default="default", help="OpenViking trusted account id. Default: default")
-    parser.add_argument("--user-id", default="default", help="OpenViking trusted user id. Default: default")
+    parser.add_argument(
+        "--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf"
+    )
+    parser.add_argument(
+        "--api-key", default=None, help="OpenViking API key. Defaults to ov.conf/ovcli.conf"
+    )
+    parser.add_argument(
+        "--account-id", default="default", help="OpenViking trusted account id. Default: default"
+    )
+    parser.add_argument(
+        "--user-id", default="default", help="OpenViking trusted user id. Default: default"
+    )
     parser.add_argument("--output", default=None, help="JSON report output path")
     parser.add_argument(
         "--events-output",
@@ -64,6 +72,12 @@ def parse_args() -> argparse.Namespace:
         help="Max steps/iterations per rollout (default: 30)",
     )
     parser.add_argument(
+        "--loader-mode",
+        choices=("skill", "constraint"),
+        default="constraint",
+        help="Tau2 VikingBot experience loading mode (default: constraint).",
+    )
+    parser.add_argument(
         "--train-index",
         default=None,
         help=(
@@ -83,8 +97,7 @@ def parse_args() -> argparse.Namespace:
         "--force-baseline-recompute",
         action="store_true",
         help=(
-            "Recompute the cached pre-training baseline instead of reusing an "
-            "existing cache file."
+            "Recompute the cached pre-training baseline instead of reusing an existing cache file."
         ),
     )
     parser.add_argument(
@@ -197,6 +210,7 @@ async def main_async() -> int:
             events_path=args.events_output,
             result_dir_name=args.result_dir_name,
             keep_default_tools=True,
+            loader_mode=args.loader_mode,
             max_iterations=args.max_iterations,
             train_index=_parse_indices_arg(args.train_index),
             eval_index=_parse_indices_arg(args.eval_index),

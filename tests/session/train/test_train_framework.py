@@ -435,7 +435,9 @@ async def test_training_updates_execution_metadata_epoch_each_epoch():
         policy_optimizer=DummyOptimizer(),
         policy_updater=DummyUpdater(),
     )
-    context = PipelineContext(max_epochs=2, execution_metadata={"rollout_stage": "eval_train_rollout"})
+    context = PipelineContext(
+        max_epochs=2, execution_metadata={"rollout_stage": "eval_train_rollout"}
+    )
 
     result = await pipeline.train(
         case_loader=ListCaseLoader([_case()]),
@@ -471,9 +473,10 @@ async def test_train_runs_test_eval_after_each_epoch_when_configured():
 
     assert [item.epoch for item in result.evaluation_passes] == [0, 1]
     assert result.metadata["evaluation_pass_count"] == 2
-    assert [
-        item.metadata.get("rollout_stage") for item in result.evaluation_passes
-    ] == ["test_rollout", "test_rollout"]
+    assert [item.metadata.get("rollout_stage") for item in result.evaluation_passes] == [
+        "test_rollout",
+        "test_rollout",
+    ]
     assert [item.metadata.get("eval_split") for item in result.evaluation_passes] == [
         "test",
         "test",
@@ -524,6 +527,7 @@ async def test_offline_policy_optimization_pipeline_epoch_hook_can_stop_training
         policy_optimizer=DummyOptimizer(),
         policy_updater=DummyUpdater(),
     )
+
     class StopTrainingHook(NoopPipelineLifecycleHook):
         def __init__(self):
             self.epochs: list[int] = []
@@ -918,12 +922,8 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
     assert {item.target_name for item in first.batch_result.plan.items} == {"case_a", "case_b"}
     assert [item.target_name for item in first.plan.items] == ["case_a"]
     assert [item.target_name for item in second.plan.items] == ["case_b"]
-    assert first.apply_result.written_uris == [
-        "viking://user/u/memories/experiences/case_a.md"
-    ]
-    assert second.apply_result.written_uris == [
-        "viking://user/u/memories/experiences/case_b.md"
-    ]
+    assert first.apply_result.written_uris == ["viking://user/u/memories/experiences/case_a.md"]
+    assert second.apply_result.written_uris == ["viking://user/u/memories/experiences/case_b.md"]
 
     assert await trainer.close() is None
 
@@ -1246,6 +1246,7 @@ async def test_get_streaming_policy_trainer_returns_process_global_instance():
     assert second is first
     assert first.config.max_gradients_per_update == 3
 
+
 class FakeSessionCommitClient:
     def __init__(self):
         self.created_sessions = []
@@ -1466,6 +1467,64 @@ async def test_rollout_artifact_recorder_writes_train_rollouts_before_commit(tmp
     assert status["task_case_experience_skill_path"] == "task_case_experience_skill.md"
     index = json.loads((tmp_path / "rollouts_index.json").read_text())
     assert index["case_groups"][0]["rollouts"][0]["artifact_state"] == "rollout_done"
+
+
+def test_rollout_artifact_recorder_includes_pre_tool_experience_reminders_in_memory_context(
+    tmp_path,
+):
+    from openviking.session.train import RolloutArtifactRecorder
+
+    recorder = RolloutArtifactRecorder(run_dir=tmp_path)
+    case = Case(
+        name="tau2_airline_train_5",
+        task_signature="tau2:airline:train:5",
+        input={
+            "domain": "airline",
+            "data_split": "airline_train",
+            "task_no": 5,
+            "task_id": "task-5",
+            "user_request": "cancel reservation",
+        },
+        rubric=Rubric(name="reward", description="reward", criteria=[]),
+    )
+    reminder = (
+        "<experience_reminder>\n"
+        "<triggered_before_tool>cancel_reservation</triggered_before_tool>\n"
+        "<experience>Check refund eligibility before cancellation.</experience>\n"
+        "</experience_reminder>"
+    )
+    rollout = Rollout(
+        case=case,
+        messages=[
+            Message(id="m1", role="user", parts=[TextPart(text="cancel reservation")]),
+            Message(id="m2", role="user", parts=[TextPart(text=reminder)]),
+        ],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=False, score=0.0, criterion_results=[], feedback=[]),
+        metadata={"memory": "remember airline rules"},
+    )
+
+    recorder.on_train_rollout_end(
+        epoch=0,
+        rollouts=[rollout],
+        snapshot_id="snapshot-1",
+        policy_set=None,
+        context=None,
+    )
+
+    memory_context = (
+        tmp_path
+        / "rollouts"
+        / "airline_train_task_5_task-5"
+        / "epoch_0"
+        / "1.train_rollout"
+        / "trial_0"
+        / "memory_context.md"
+    ).read_text()
+    assert "remember airline rules" in memory_context
+    assert "# Pre-tool Experience Reminders" in memory_context
+    assert "<triggered_before_tool>cancel_reservation</triggered_before_tool>" in memory_context
+    assert "Check refund eligibility before cancellation." in memory_context
 
 
 def test_rollout_artifact_recorder_separates_epoch_eval_dirs(tmp_path):
@@ -1704,12 +1763,7 @@ def test_rollout_artifact_event_recorder_enriches_commit_result(tmp_path):
         / "trial_0"
     )
     commit_dir = (
-        tmp_path
-        / "rollouts"
-        / "airline_train_task_7_task-7"
-        / "epoch_0"
-        / "2.train"
-        / "trial_0"
+        tmp_path / "rollouts" / "airline_train_task_7_task-7" / "epoch_0" / "2.train" / "trial_0"
     )
     assert not (rollout_dir / "commit_result.json").exists()
     commit_result = json.loads((commit_dir / "commit_result.json").read_text())
@@ -1733,22 +1787,22 @@ async def test_rollout_artifact_recorder_writes_epoch_commit_artifacts_under_com
     class CommitArtifactClient:
         async def read(self, uri):
             assert uri == "viking://archive/memory_diff.json"
-            return json.dumps({
-                "operations": {
-                    "adds": [
-                        {"uri": "viking://memory/new.md", "after": "# New\nbody"}
-                    ],
-                    "updates": [
-                        {
-                            "uri": "viking://memory/old.md",
-                            "before": "# Old\nbody",
-                            "after": "# Old\nnew body",
-                        }
-                    ],
-                    "deletes": [],
-                },
-                "summary": {"total_adds": 1, "total_updates": 1, "total_deletes": 0},
-            })
+            return json.dumps(
+                {
+                    "operations": {
+                        "adds": [{"uri": "viking://memory/new.md", "after": "# New\nbody"}],
+                        "updates": [
+                            {
+                                "uri": "viking://memory/old.md",
+                                "before": "# Old\nbody",
+                                "after": "# Old\nnew body",
+                            }
+                        ],
+                        "deletes": [],
+                    },
+                    "summary": {"total_adds": 1, "total_updates": 1, "total_deletes": 0},
+                }
+            )
 
     recorder = RolloutArtifactRecorder(run_dir=tmp_path, client=CommitArtifactClient())
     case = Case(
@@ -1796,12 +1850,7 @@ async def test_rollout_artifact_recorder_writes_epoch_commit_artifacts_under_com
         / "trial_0"
     )
     commit_dir = (
-        tmp_path
-        / "rollouts"
-        / "airline_train_task_7_task-7"
-        / "epoch_0"
-        / "2.train"
-        / "trial_0"
+        tmp_path / "rollouts" / "airline_train_task_7_task-7" / "epoch_0" / "2.train" / "trial_0"
     )
     assert (train_dir / "status.json").exists()
     assert not (train_dir / "commit_result.json").exists()

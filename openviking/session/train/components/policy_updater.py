@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from openviking.session.memory.constraints import smoke_test_trigger_code, validate_trigger_code
+from openviking.session.memory.constraints.trigger_sandbox import TriggerSandboxError
 from openviking.session.memory.dataclass import (
     MemoryFile,
     ResolvedOperation,
@@ -130,9 +132,7 @@ class MemoryFilePolicyUpdater:
         )
 
 
-def _apply_items_to_snapshot(
-    items: list[PolicyPlanItem], policy_set: PolicySet
-) -> PolicySet:
+def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet) -> PolicySet:
     policies_by_uri = {policy.uri: policy for policy in policy_set.policies}
     result = list(policy_set.policies)
 
@@ -175,7 +175,7 @@ def _apply_items_to_snapshot(
             name=item.target_name,
         )
         metadata = dict(existing.metadata) if existing is not None else {}
-        metadata.update(item.metadata.get("patch_metadata", {}))
+        metadata.update(_metadata_patch_fields(item))
         metadata.setdefault("memory_type", item.memory_type or "experiences")
         metadata["experience_name"] = item.target_name
         version = (existing.version + 1) if existing is not None else 1
@@ -205,6 +205,21 @@ def _apply_items_to_snapshot(
     )
 
 
+def _metadata_patch_fields(item: PolicyPlanItem) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key in ("patch_metadata", "merge_memory_fields"):
+        value = item.metadata.get(key) if isinstance(item.metadata, dict) else None
+        if isinstance(value, dict):
+            fields.update(
+                {
+                    field_key: field_value
+                    for field_key, field_value in value.items()
+                    if field_key != "content"
+                }
+            )
+    return fields
+
+
 def _find_policy(
     policy_set: PolicySet,
     *,
@@ -223,7 +238,6 @@ def _target_uri(item: PolicyPlanItem, root_uri: str) -> str:
     if item.target_uri:
         return item.target_uri
     return f"{root_uri.rstrip('/')}/{_safe_experience_filename(item.target_name)}.md"
-
 
 
 def _plan_to_resolved_operations(
@@ -247,8 +261,7 @@ def _plan_to_resolved_operations(
             != _normalize_guard_content(item.before_content)
         ):
             errors.append(
-                "base content mismatch for "
-                f"{item.target_name}: expected gradient before_content"
+                f"base content mismatch for {item.target_name}: expected gradient before_content"
             )
             continue
 
@@ -264,9 +277,12 @@ def _plan_to_resolved_operations(
 
         updated = _find_policy(updated_policy_set, uri=uri, name=item.target_name)
         if updated is None:
-            errors.append(
-                f"planned policy not found after simulation: {item.target_name}"
-            )
+            errors.append(f"planned policy not found after simulation: {item.target_name}")
+            continue
+
+        trigger_error = _constraint_trigger_preflight_error(updated, memory_type=item.memory_type)
+        if trigger_error:
+            errors.append(trigger_error)
             continue
 
         upserts.append(
@@ -369,3 +385,25 @@ def _safe_experience_filename(name: str) -> str:
 
 def _normalize_guard_content(content: str) -> str:
     return content.strip()
+
+
+def _constraint_trigger_preflight_error(policy: Policy, *, memory_type: str | None) -> str | None:
+    """Validate LLM-generated trigger_code before writing experience constraints.
+
+    Old on-disk experiences without trigger_code can still be read by the
+    legacy skill loader, but new writes in the train/update path must include a
+    trigger so default ``loader_mode=constraint`` does not silently persist an
+    unusable experience.  Existing trigger_code is preserved by snapshot merge.
+    """
+
+    if (memory_type or "experiences") != "experiences":
+        return None
+    trigger_code = str((policy.metadata or {}).get("trigger_code") or "").strip()
+    if not trigger_code:
+        return f"missing trigger_code for {policy.name}"
+    try:
+        validate_trigger_code(trigger_code)
+        smoke_test_trigger_code(trigger_code)
+    except TriggerSandboxError as exc:
+        return f"invalid trigger_code for {policy.name}: {exc}"
+    return None
