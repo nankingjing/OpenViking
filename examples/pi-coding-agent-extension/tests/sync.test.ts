@@ -436,6 +436,16 @@ describe("SyncManager — normal mode (takeoverEnabled=false)", () => {
     expect(fakeClient.commitSession).toHaveBeenCalled();
   }, 10000);
 
+  it("internal threshold commit is skipped when flush fails", async () => {
+    fakeClient.addMessage = vi.fn().mockResolvedValue(false);
+    const sync = await makeReadySync();
+
+    const bigText = "I prefer " + "x".repeat(500);
+    await sync.syncTurn(bigText, bigText, [], 1);
+
+    expect(fakeClient.commitSession).not.toHaveBeenCalled();
+  });
+
   it("commit() returns archive_uri string on success", async () => {
     const sync = await makeReadySync();
     const result = await sync.commit();

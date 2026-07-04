@@ -201,7 +201,11 @@ export class TakeoverManager {
     if (this.committing) return false;
     this.committing = true;
     try {
-      await this.sync.flushQueue();
+      const flushed = await this.sync.flushQueue();
+      if (!flushed) {
+        this.log("takeover: flush failed; commit postponed");
+        return false;
+      }
       const archiveUri = await this.sync.commit(false);
       if (!archiveUri) {
         this.log("takeover: commit failed; retaining pending tokens");
@@ -252,7 +256,8 @@ export class TakeoverManager {
 
     this.committing = true;
     try {
-      await this.sync.flushQueue();
+      const flushed = await this.sync.flushQueue();
+      if (!flushed) return undefined; // fail-open: pi's compaction proceeds
       const archiveUri = await this.sync.commit(false);
       if (!archiveUri) return undefined; // fail-open: pi's compaction proceeds
 

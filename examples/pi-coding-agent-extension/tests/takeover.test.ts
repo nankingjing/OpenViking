@@ -84,7 +84,7 @@ function makeFakeClient(overrides: Record<string, any> = {}) {
 
 function makeFakeSync(overrides: Record<string, any> = {}) {
   return {
-    flushQueue: vi.fn().mockResolvedValue(undefined),
+    flushQueue: vi.fn().mockResolvedValue(true),
     commit: vi.fn().mockResolvedValue(null),
     sessionId: "test-session",
     ...overrides,
@@ -618,6 +618,26 @@ describe("TakeoverManager.onTurnSynced + commitAndAdvance", () => {
     expect(entry.overview.length).toBeLessThan(1000);
   });
 
+  it("flush returns false → no commit, boundary unchanged, pendingTokens retained", async () => {
+    fakeSync.flushQueue = vi.fn().mockResolvedValue(false);
+    const mgr = makeManager(baseConfig({
+      takeoverTokenThreshold: 50,
+      takeoverKeepRecentTurns: 1,
+    }));
+    mgr.transformContext([
+      userMsg("t1"), assistantMsg("a1"),
+      userMsg("t2"),
+    ]);
+    await mgr.onTurnSynced(200);
+
+    expect(fakeSync.flushQueue).toHaveBeenCalled();
+    expect(fakeSync.commit).not.toHaveBeenCalled();
+    const state = mgr.state;
+    expect(state.coveredUserTurns).toBe(0);
+    expect(state.pendingTokens).toBe(200);
+    expect(appendEntry).not.toHaveBeenCalled();
+  });
+
   it("commit returns null → boundary unchanged, pendingTokens retained", async () => {
     fakeSync.commit = vi.fn().mockResolvedValue(null);
     const mgr = makeManager(baseConfig({
@@ -744,6 +764,17 @@ describe("TakeoverManager.handleBeforeCompact", () => {
       tokensBefore: 50000,
     });
     expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when flush fails", async () => {
+    fakeSync.flushQueue = vi.fn().mockResolvedValue(false);
+    const mgr = makeManager(baseConfig());
+    const result = await mgr.handleBeforeCompact({
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 1000,
+    });
+    expect(result).toBeUndefined();
+    expect(fakeSync.commit).not.toHaveBeenCalled();
   });
 
   it("returns undefined when commit fails", async () => {

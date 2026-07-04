@@ -299,15 +299,18 @@ export class SyncManager {
     if (!this.config.takeoverEnabled &&
         this.config.commitTokenThreshold > 0 &&
         this.pendingTokens >= this.config.commitTokenThreshold) {
-      await this.writeQueue.flush();
-      await this.commit(false);
+      const flushed = await this.writeQueue.flush();
+      if (flushed) await this.commit(false);
     }
     return turnTokens;
   }
 
-  /** Flush queued turns without cancelling the flush timer (mid-session commits). */
-  async flushQueue(): Promise<void> {
-    await this.writeQueue?.flush();
+  /**
+   * Flush queued turns without cancelling the flush timer (mid-session commits).
+   * Returns false when any pre-existing queued turn remains undelivered.
+   */
+  async flushQueue(): Promise<boolean> {
+    return await this.writeQueue?.flush() ?? true;
   }
 
   async commit(_wait: boolean = false): Promise<string | null> {
