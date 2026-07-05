@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlparse
 
+from openviking.utils.feishu_errors import build_feishu_error_details, raise_from_lark_response
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -371,8 +372,11 @@ class FeishuAccessor(DataAccessor):
         else:
             response = client.wiki.v2.space.get_node(request, option)
         if not response.success():
-            raise RuntimeError(
-                f"Failed to resolve wiki node {token}: code={response.code}, msg={response.msg}"
+            raise_from_lark_response(
+                response,
+                operation=f"resolve wiki node {token}",
+                resource=token,
+                using_user_token=bool(feishu_access_token),
             )
         node = response.data.node
         obj_type = node.obj_type or ""
@@ -467,9 +471,11 @@ class FeishuAccessor(DataAccessor):
                 response = client.docx.v1.document_block.list(request, option)
 
             if not response.success():
-                raise RuntimeError(
-                    f"Failed to fetch blocks for {document_id}: "
-                    f"code={response.code}, msg={response.msg}"
+                raise_from_lark_response(
+                    response,
+                    operation=f"fetch blocks for {document_id}",
+                    resource=document_id,
+                    using_user_token=bool(feishu_access_token),
                 )
 
             items = response.data.items or []
