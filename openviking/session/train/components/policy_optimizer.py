@@ -68,6 +68,8 @@ class PatchMergePolicyOptimizer:
         if context is None:
             raise ValueError("PatchMergePolicyOptimizerContext.request_context is required")
 
+        context.metadata.pop("gate_retry_reports", None)
+        context.metadata.pop("post_validation_retries", None)
         patch_gradients = list(gradients)
         if not patch_gradients:
             return PolicyUpdatePlan(
@@ -109,9 +111,12 @@ class PatchMergePolicyOptimizer:
             ],
         }
         gate_retry_reports = list(context.metadata.get("gate_retry_reports", []) or [])
+        gate_retry_events = list(context.metadata.get("post_validation_retries", []) or [])
         if gate_retry_reports:
             metadata["gate_reports"] = gate_retry_reports
             metadata["gate_retry_reports"] = gate_retry_reports
+        if gate_retry_events:
+            metadata["post_validation_retries"] = gate_retry_events
 
         return PolicyUpdatePlan(items=items, metadata=metadata)
 
@@ -163,7 +168,6 @@ class PatchMergePolicyOptimizer:
         )
 
         async def post_validation_hook(operations: Any, retry_count: int):
-            del retry_count
             gate_runner = context.gate_runner
             if gate_runner is None or self.memory_type != "experiences":
                 return None
@@ -181,7 +185,16 @@ class PatchMergePolicyOptimizer:
             instruction = build_gate_retry_instruction(report)
             if not instruction:
                 return None
-            context.metadata.setdefault("gate_retry_reports", []).append(report.to_dict())
+            report_dict = report.to_dict()
+            context.metadata.setdefault("gate_retry_reports", []).append(report_dict)
+            context.metadata.setdefault("post_validation_retries", []).append(
+                _post_validation_retry_event(
+                    stage="post_plan",
+                    retry_index=retry_count,
+                    report=report_dict,
+                    instruction=instruction,
+                )
+            )
             return PostValidationRetryDecision(retry=True, instruction=instruction)
 
         orchestrator = ExtractLoop(
@@ -197,6 +210,33 @@ class PatchMergePolicyOptimizer:
         )
         operations, _ = await orchestrator.run()
         return operations
+
+
+def _post_validation_retry_event(
+    *,
+    stage: str,
+    retry_index: int,
+    report: dict[str, Any],
+    instruction: str,
+) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "retry_index": retry_index,
+        "evaluated_count": int(report.get("evaluated_count") or 0),
+        "allowed_count": int(report.get("allowed_count") or 0),
+        "rejected_count": int(report.get("rejected_count") or 0),
+        "warning_count": int(report.get("warning_count") or 0),
+        "retriable": bool(str(instruction or "").strip()),
+        "final_outcome": "retry_requested",
+        "instruction_preview": _preview_instruction(instruction),
+    }
+
+
+def _preview_instruction(instruction: str, *, limit: int = 500) -> str:
+    text = " ".join(str(instruction or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 def _constant_prefetch(messages: list[dict[str, Any]]):
     async def prefetch() -> list[dict[str, Any]]:
@@ -470,6 +510,7 @@ def _operations_to_plan_items(
                     target_name=target_name,
                     before_content=before_content,
                     after_content=after_content,
+                    trigger_code=str(fields.get("trigger_code") or ""),
                     source_links_by_target=source_links_by_target,
                     replacement_source_uris=replacement_source_uris_by_target.get(
                         target_uri or "",
@@ -513,6 +554,7 @@ def _operations_to_plan_items(
                     target_name=target_name,
                     before_content=old_file.plain_content(),
                     after_content=None,
+                    trigger_code=str((old_file.extra_fields or {}).get("trigger_code") or ""),
                     source_links_by_target=source_links_by_target,
                     replacement_source_uris=[],
                 ),
@@ -641,6 +683,7 @@ def _source_trajectory_links_for_plan_item(
     target_name: str,
     before_content: str | None,
     after_content: str | None,
+    trigger_code: str = "",
     source_links_by_target: dict[tuple[str, str], list[StoredLink]],
     replacement_source_uris: list[str] | None = None,
     include_all_sources: bool = False,
@@ -661,6 +704,7 @@ def _source_trajectory_links_for_plan_item(
         target_name=target_name,
         before_content=before_content,
         after_content=after_content,
+        trigger_code=trigger_code,
         source_links_by_target=source_links_by_target,
         replacement_source_uris=replacement_source_uris or [],
         include_all_sources=include_all_sources,
@@ -681,6 +725,7 @@ def _plan_item_source_keys(
     target_name: str,
     before_content: str | None,
     after_content: str | None,
+    trigger_code: str = "",
     source_links_by_target: dict[tuple[str, str], list[StoredLink]],
     replacement_source_uris: list[str] | None = None,
     include_all_sources: bool = False,
@@ -694,10 +739,13 @@ def _plan_item_source_keys(
 
     uri = str(target_uri or "")
     name = str(target_name or "")
+    trigger = str(trigger_code or "").strip()
     if uri:
         add(("uri", uri))
     if name:
         add(("name", name))
+    if trigger:
+        add(("trigger_code", trigger))
     for source_uri in replacement_source_uris or []:
         add(("uri", source_uri))
 
@@ -778,18 +826,21 @@ def _gradient_source_keys(
     after_file = getattr(gradient, "after_file", None)
     if after_file is not None:
         add("content", getattr(after_file, "content", ""))
+        add("trigger_code", (getattr(after_file, "extra_fields", {}) or {}).get("trigger_code"))
     before_file = getattr(gradient, "before_file", None)
     if before_file is not None:
         add("uri", getattr(before_file, "uri", None))
         fields = getattr(before_file, "extra_fields", {}) or {}
         add("name", fields.get("experience_name") or fields.get("name"))
         add("content", getattr(before_file, "content", ""))
+        add("trigger_code", fields.get("trigger_code"))
 
     superseded_policy = _find_superseded_policy(_gradient_supersedes(gradient), policy_set)
     if superseded_policy is not None:
         add("uri", superseded_policy.uri)
         add("name", superseded_policy.name)
         add("content", superseded_policy.content)
+        add("trigger_code", superseded_policy.metadata.get("trigger_code"))
 
     return keys
 

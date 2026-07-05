@@ -92,12 +92,13 @@ def _memory_file(
     content: str,
     version: int | None = 1,
     status: str = "production",
+    trigger_code: str = DEFAULT_TRIGGER_CODE,
 ) -> MemoryFile:
     fields: dict[str, Any] = {
         "memory_type": "experiences",
         "experience_name": name,
         "status": status,
-        "trigger_code": DEFAULT_TRIGGER_CODE,
+        "trigger_code": trigger_code,
     }
     if version is not None:
         fields["version"] = version
@@ -120,14 +121,27 @@ def _patch_gradient(
     links: list[StoredLink] | None = None,
     confidence: float = 0.8,
     metadata: dict[str, Any] | None = None,
+    trigger_code: str = DEFAULT_TRIGGER_CODE,
 ) -> PatchSemanticGradient:
     return PatchSemanticGradient(
         before_file=(
-            _memory_file(name=name, uri=uri, content=before, version=base_version)
+            _memory_file(
+                name=name,
+                uri=uri,
+                content=before,
+                version=base_version,
+                trigger_code=trigger_code,
+            )
             if before is not None
             else None
         ),
-        after_file=_memory_file(name=name, uri=uri, content=after, version=base_version),
+        after_file=_memory_file(
+            name=name,
+            uri=uri,
+            content=after,
+            version=base_version,
+            trigger_code=trigger_code,
+        ),
         base_version=base_version,
         rationale=rationale,
         links=links
@@ -633,6 +647,115 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
 
 
 @pytest.mark.asyncio
+async def test_patch_merge_policy_optimizer_recovers_source_link_by_unique_trigger_code(
+    monkeypatch,
+):
+    from openviking.session.memory.dataclass import (
+        ResolvedOperation,
+        ResolvedOperations,
+    )
+
+    policy_set = ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[])
+    root = policy_set.root_uri
+    flight_trigger = (
+        'def should_trigger(ctx):\n'
+        '    return ctx.get("candidate_tool") == "update_reservation_flights"\n'
+    )
+    baggage_trigger = (
+        'def should_trigger(ctx):\n'
+        '    return ctx.get("candidate_tool") == "update_reservation_baggages"\n'
+    )
+    gradients = [
+        _patch_gradient(
+            name="原始航班支付经验",
+            uri=f"{root}/原始航班支付经验.md",
+            before=None,
+            after="航班修改时使用用户确认的 payment_id",
+            base_version=None,
+            trigger_code=flight_trigger,
+            links=[
+                StoredLink(
+                    from_uri=f"{root}/原始航班支付经验.md",
+                    to_uri="viking://user/u/memories/trajectories/traj_flight.md",
+                    link_type="derived_from",
+                    weight=1.0,
+                )
+            ],
+        ),
+        _patch_gradient(
+            name="原始行李支付经验",
+            uri=f"{root}/原始行李支付经验.md",
+            before=None,
+            after="行李修改时使用用户确认的 payment_id",
+            base_version=None,
+            trigger_code=baggage_trigger,
+            links=[
+                StoredLink(
+                    from_uri=f"{root}/原始行李支付经验.md",
+                    to_uri="viking://user/u/memories/trajectories/traj_baggage.md",
+                    link_type="derived_from",
+                    weight=1.0,
+                )
+            ],
+        ),
+    ]
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self):
+            return (
+                ResolvedOperations(
+                    upsert_operations=[
+                        ResolvedOperation(
+                            old_memory_file_content=None,
+                            memory_fields={
+                                "experience_name": "update_flights支付方式验证",
+                                "content": "改名后的航班支付经验",
+                                "trigger_code": flight_trigger,
+                            },
+                            memory_type="experiences",
+                            uris=[f"{root}/update_flights支付方式验证.md"],
+                        ),
+                        ResolvedOperation(
+                            old_memory_file_content=None,
+                            memory_fields={
+                                "experience_name": "update_baggages支付方式验证",
+                                "content": "改名后的行李支付经验",
+                                "trigger_code": baggage_trigger,
+                            },
+                            memory_type="experiences",
+                            uris=[f"{root}/update_baggages支付方式验证.md"],
+                        ),
+                    ],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                [],
+            )
+
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
+
+    plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+        gradients,
+        policy_set,
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
+    )
+
+    links_by_name = {item.target_name: {link.to_uri for link in item.links} for item in plan.items}
+    assert links_by_name == {
+        "update_flights支付方式验证": {
+            "viking://user/u/memories/trajectories/traj_flight.md"
+        },
+        "update_baggages支付方式验证": {
+            "viking://user/u/memories/trajectories/traj_baggage.md"
+        },
+    }
+
+
 async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_scoped(monkeypatch):
     from openviking.session.memory.dataclass import (
         ResolvedOperation,

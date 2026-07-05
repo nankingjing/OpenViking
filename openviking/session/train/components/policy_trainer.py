@@ -86,6 +86,16 @@ class BatchPolicyTrainer:
             ctx=ctx,
             analyses=analyses,
         )
+        gate_reports = list(ctx.execution_metadata.get("gate_reports", []) or [])
+        gate_reports.extend(
+            report
+            for report in dict(getattr(plan, "metadata", {}) or {}).get("gate_reports", [])
+            if isinstance(report, dict)
+        )
+        post_validation_retries = _collect_post_validation_retries(
+            analyses=analyses,
+            plans=[plan],
+        )
         return RolloutTrainingResult(
             analyses=analyses,
             gradients=gradients,
@@ -98,6 +108,9 @@ class BatchPolicyTrainer:
                 "gradient_count": len(gradients),
                 "score": average_score(analyses),
                 "source": "batch_rollouts",
+                "gate_reports": gate_reports,
+                "gate_summary": _gate_summary(gate_reports),
+                "post_validation_retries": post_validation_retries,
             },
         )
 
@@ -418,6 +431,8 @@ class StreamingPolicyTrainer:
             for report in dict(getattr(plan, "metadata", {}) or {}).get("gate_reports", [])
             if isinstance(report, dict)
         )
+        post_validation_retries = _collect_post_validation_retries(analyses=analyses, plans=plans)
+        gate_reports = [*gradient_gate_reports, *plan_gate_reports]
         result = RolloutTrainingResult(
             analyses=analyses,
             gradients=gradients,
@@ -433,7 +448,9 @@ class StreamingPolicyTrainer:
                 "score": average_score(analyses),
                 "source": "streaming_rollouts",
                 "flush_reason": reason,
-                "gate_reports": [*gradient_gate_reports, *plan_gate_reports],
+                "gate_reports": gate_reports,
+                "gate_summary": _gate_summary(gate_reports),
+                "post_validation_retries": post_validation_retries,
             },
         )
         tracer.info(
@@ -446,6 +463,40 @@ class StreamingPolicyTrainer:
         )
         return result
 
+
+
+def _collect_post_validation_retries(
+    *,
+    analyses: list[RolloutAnalysis],
+    plans: list[PolicyUpdatePlan],
+) -> list[dict[str, Any]]:
+    retries: list[dict[str, Any]] = []
+    for analysis in analyses:
+        for item in dict(getattr(analysis, "metadata", {}) or {}).get("post_validation_retries", []):
+            if isinstance(item, dict):
+                retries.append(item)
+    for plan in plans:
+        for item in dict(getattr(plan, "metadata", {}) or {}).get("post_validation_retries", []):
+            if isinstance(item, dict):
+                retries.append(item)
+    return retries
+
+
+def _gate_summary(reports: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    summary: dict[str, dict[str, int]] = {}
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        stage = str(report.get("stage") or "unknown")
+        stage_summary = summary.setdefault(
+            stage,
+            {"evaluated": 0, "allowed": 0, "rejected": 0, "warnings": 0},
+        )
+        stage_summary["evaluated"] += int(report.get("evaluated_count") or 0)
+        stage_summary["allowed"] += int(report.get("allowed_count") or 0)
+        stage_summary["rejected"] += int(report.get("rejected_count") or 0)
+        stage_summary["warnings"] += int(report.get("warning_count") or 0)
+    return summary
 
 def _pop_latest_gate_report(analysis: RolloutAnalysis | None) -> dict[str, Any] | None:
     if analysis is None:

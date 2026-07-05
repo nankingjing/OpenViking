@@ -840,6 +840,10 @@ class SessionCompressorV3:
             updates=updates,
             deletes=deletes,
             gate_rejections=_gate_rejections_from_training_result(training_result),
+            gate_summary=_gate_summary_from_training_result(training_result),
+            post_validation_retries=_post_validation_retries_from_training_result(
+                training_result
+            ),
         )
 
     async def _link_case_to_training_outputs(
@@ -1650,6 +1654,8 @@ def _make_memory_diff(
     updates: list[dict[str, Any]],
     deletes: list[dict[str, Any]],
     gate_rejections: list[dict[str, Any]] | None = None,
+    gate_summary: dict[str, Any] | None = None,
+    post_validation_retries: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     result = {
         "archive_uri": archive_uri,
@@ -1665,10 +1671,15 @@ def _make_memory_diff(
             "total_updates": len(updates),
             "total_deletes": len(deletes),
             "total_gate_rejections": len(gate_rejections or []),
+            "total_post_validation_retries": len(post_validation_retries or []),
         },
     }
     if gate_rejections:
         result["gate_rejections"] = list(gate_rejections)
+    if gate_summary:
+        result["gate_summary"] = dict(gate_summary)
+    if post_validation_retries:
+        result["post_validation_retries"] = list(post_validation_retries)
     return result
 
 
@@ -1681,6 +1692,8 @@ def _merge_memory_diffs(
     updates: list[dict[str, Any]] = []
     deletes: list[dict[str, Any]] = []
     gate_rejections: list[dict[str, Any]] = []
+    post_validation_retries: list[dict[str, Any]] = []
+    gate_summary: dict[str, Any] = {}
     trace_id = tracer.get_trace_id() or None
     for diff in diffs:
         if not isinstance(diff, dict):
@@ -1696,21 +1709,30 @@ def _merge_memory_diffs(
         gate_rejections.extend(
             [item for item in diff.get("gate_rejections", []) if isinstance(item, dict)]
         )
+        post_validation_retries.extend(
+            [
+                item
+                for item in diff.get("post_validation_retries", [])
+                if isinstance(item, dict)
+            ]
+        )
+        _merge_gate_summary(gate_summary, diff.get("gate_summary"))
     merged = _make_memory_diff(
         archive_uri=archive_uri,
         adds=adds,
         updates=updates,
         deletes=deletes,
         gate_rejections=gate_rejections,
+        gate_summary=gate_summary,
+        post_validation_retries=post_validation_retries,
     )
     merged["trace_id"] = trace_id
     return merged
 
 
-def _gate_rejections_from_training_result(
-    training_result: RolloutTrainingResult,
-) -> list[dict[str, Any]]:
-    reports: list[Any] = []
+
+def _training_gate_reports(training_result: RolloutTrainingResult) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
     metadata = dict(getattr(training_result, "metadata", {}) or {})
     if isinstance(metadata.get("gate_report"), dict):
         reports.append(metadata.get("gate_report"))
@@ -1724,9 +1746,64 @@ def _gate_rejections_from_training_result(
         reports.extend(
             item for item in plan_metadata.get("gate_reports", []) if isinstance(item, dict)
         )
+    return reports
 
+
+def _gate_summary_from_training_result(
+    training_result: RolloutTrainingResult,
+) -> dict[str, Any]:
+    metadata = dict(getattr(training_result, "metadata", {}) or {})
+    existing = metadata.get("gate_summary")
+    if isinstance(existing, dict) and existing:
+        return existing
+    summary: dict[str, Any] = {}
+    for report in _training_gate_reports(training_result):
+        stage = str(report.get("stage") or "unknown")
+        bucket = summary.setdefault(
+            stage,
+            {"evaluated": 0, "allowed": 0, "rejected": 0, "warnings": 0},
+        )
+        bucket["evaluated"] += int(report.get("evaluated_count") or 0)
+        bucket["allowed"] += int(report.get("allowed_count") or 0)
+        bucket["rejected"] += int(report.get("rejected_count") or 0)
+        bucket["warnings"] += int(report.get("warning_count") or 0)
+    return summary
+
+
+def _post_validation_retries_from_training_result(
+    training_result: RolloutTrainingResult,
+) -> list[dict[str, Any]]:
+    retries: list[dict[str, Any]] = []
+    metadata = dict(getattr(training_result, "metadata", {}) or {})
+    retries.extend(
+        item for item in metadata.get("post_validation_retries", []) if isinstance(item, dict)
+    )
+    plan = getattr(training_result, "plan", None)
+    plan_metadata = dict(getattr(plan, "metadata", {}) or {}) if plan is not None else {}
+    retries.extend(
+        item for item in plan_metadata.get("post_validation_retries", []) if isinstance(item, dict)
+    )
+    return retries
+
+
+def _merge_gate_summary(target: dict[str, Any], source: Any) -> None:
+    if not isinstance(source, dict):
+        return
+    for stage, values in source.items():
+        if not isinstance(values, dict):
+            continue
+        bucket = target.setdefault(
+            str(stage),
+            {"evaluated": 0, "allowed": 0, "rejected": 0, "warnings": 0},
+        )
+        for key in ("evaluated", "allowed", "rejected", "warnings"):
+            bucket[key] += int(values.get(key) or 0)
+
+def _gate_rejections_from_training_result(
+    training_result: RolloutTrainingResult,
+) -> list[dict[str, Any]]:
     rejections: list[dict[str, Any]] = []
-    for report in reports:
+    for report in _training_gate_reports(training_result):
         stage = str(report.get("stage") or "")
         for decision in report.get("decisions", []) or []:
             if not isinstance(decision, dict) or decision.get("action") != "reject":

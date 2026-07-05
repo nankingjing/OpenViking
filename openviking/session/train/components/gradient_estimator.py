@@ -136,22 +136,33 @@ class ExperienceGradientEstimator:
         provider._viking_fs = viking_fs
 
         async def post_validation_hook(operations: Any, retry_count: int):
-            del retry_count
+            analysis_obj = _analysis_from_context_metadata(context)
+            experience_set = _experience_set_from_context_metadata(context)
             gradients = _operations_to_gradients(
                 operations=operations,
                 trajectory=trajectory,
-                analysis=_analysis_from_context_metadata(context),
-                experience_set=_experience_set_from_context_metadata(context),
+                analysis=analysis_obj,
+                experience_set=experience_set,
             )
             _, report = await _evaluate_experience_gradients(
                 gradients=gradients,
-                analysis=_analysis_from_context_metadata(context),
-                experience_set=_experience_set_from_context_metadata(context),
+                analysis=analysis_obj,
+                experience_set=experience_set,
             )
             instruction = build_gate_retry_instruction(report)
             if not instruction:
                 return None
-            context.metadata.setdefault("gate_retry_reports", []).append(report.to_dict())
+            report_dict = report.to_dict()
+            context.metadata.setdefault("gate_retry_reports", []).append(report_dict)
+            event = _post_validation_retry_event(
+                stage="post_gradient",
+                retry_index=retry_count,
+                report=report_dict,
+                instruction=instruction,
+            )
+            context.metadata.setdefault("post_validation_retries", []).append(event)
+            analysis_obj.metadata.setdefault("post_validation_retries", []).append(event)
+            trajectory.metadata.setdefault("post_validation_retries", []).append(event)
             return PostValidationRetryDecision(retry=True, instruction=instruction)
 
         orchestrator = ExtractLoop(
@@ -181,6 +192,33 @@ async def _evaluate_experience_gradients(
         policy_set=experience_set,
     )
 
+
+
+def _post_validation_retry_event(
+    *,
+    stage: str,
+    retry_index: int,
+    report: dict[str, Any],
+    instruction: str,
+) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "retry_index": retry_index,
+        "evaluated_count": int(report.get("evaluated_count") or 0),
+        "allowed_count": int(report.get("allowed_count") or 0),
+        "rejected_count": int(report.get("rejected_count") or 0),
+        "warning_count": int(report.get("warning_count") or 0),
+        "retriable": bool(str(instruction or "").strip()),
+        "final_outcome": "retry_requested",
+        "instruction_preview": _preview_instruction(instruction),
+    }
+
+
+def _preview_instruction(instruction: str, *, limit: int = 500) -> str:
+    text = " ".join(str(instruction or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 def _record_gate_report(
     report: Any,
