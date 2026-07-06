@@ -23,7 +23,7 @@ const catalogPath = join(repoRoot, ".agents", "plugins", "marketplace.json");
 const manifestPath = join(pluginDir, ".codex-plugin", "plugin.json");
 
 const PLUGIN_NAME = "openviking-memory";
-const REAL_MCP_TOOLS = ["search", "store", "read", "list", "grep", "glob", "forget", "add_resource", "health"];
+const REAL_MCP_TOOLS = ["recall", "search", "store", "read", "list", "grep", "glob", "forget", "add_resource", "health"];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 
 function readJson(path) {
@@ -105,7 +105,7 @@ test("plugin.json describes the real MCP tools, not the legacy names", () => {
   for (const legacy of LEGACY_TOOL_NAMES) {
     assert.ok(!longDesc.includes(legacy), `longDescription must not reference legacy tool name "${legacy}"`);
   }
-  for (const tool of ["search", "add_resource", "health"]) {
+  for (const tool of ["recall", "search", "add_resource", "health"]) {
     assert.ok(longDesc.includes(tool), `longDescription should mention real tool "${tool}"`);
   }
 });
@@ -142,5 +142,5 @@ test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {
 
 test("plugin.json keeps the canonical tool list available for reference", () => {
   // Sanity: the documented tool set is the one we assert against above.
-  assert.equal(REAL_MCP_TOOLS.length, 9);
+  assert.equal(REAL_MCP_TOOLS.length, 10);
 });
