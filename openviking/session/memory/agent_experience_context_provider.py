@@ -76,7 +76,7 @@ For each distinct reusable failure pattern in the trajectory, output a SEPARATE 
 
 Each entry:
 - `experience_name`: the name of the experience (new or existing)
-- `content`: the full failure-repair reminder content (rewrite holistically, incorporating old + new)
+- `constraint`: the full failure-repair reminder content (rewrite holistically, incorporating old + new)
 - `trigger_code`: restricted Python code defining `should_trigger(ctx) -> bool`; it decides when
   this repair reminder should be injected before a candidate tool call.
 - `supersedes`: the `experience_name` of an older experience this one replaces — set ONLY when the new name is genuinely different and broader. Leave empty otherwise.
@@ -179,7 +179,13 @@ All memory content must be written in {output_language}.
         payload = dict(result or {})
         if memory_file is not None:
             payload = memory_file.to_metadata()
-            payload["content"] = memory_file.content
+            if memory_file.memory_type == EXPERIENCE_MEMORY_TYPE or "/memories/experiences/" in uri:
+                payload["constraint"] = str(
+                    (memory_file.extra_fields or {}).get("constraint") or memory_file.content or ""
+                )
+                payload.pop("content", None)
+            else:
+                payload["content"] = memory_file.content
         payload["uri"] = uri
         payload["context_role"] = context_role
         return payload
@@ -263,6 +269,7 @@ All memory content must be written in {output_language}.
                     uri=exp_uri,
                     context_role="candidate_experience",
                     result=result,
+                    memory_file=mf,
                 ),
             )
             call_id_seq += 1

@@ -48,7 +48,12 @@ class ConstraintExperience:
             or getattr(policy, "name", "")
             or uri.rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
         )
-        constraint = str(metadata.get("content") or getattr(policy, "content", "") or "").strip()
+        constraint = str(
+            metadata.get("constraint")
+            or metadata.get("content")
+            or getattr(policy, "content", "")
+            or ""
+        ).strip()
         if not constraint:
             return None
         return cls(
@@ -71,8 +76,8 @@ class ConstraintExperience:
         trigger_code = str(metadata.get("trigger_code") or "").strip()
         if not trigger_code:
             return None
-        if fields.get("content"):
-            constraint = str(fields.get("content") or "").strip()
+        if fields.get("constraint") or fields.get("content"):
+            constraint = str(fields.get("constraint") or fields.get("content") or "").strip()
         else:
             plain = getattr(memory_file, "plain_content", None)
             if callable(plain):
@@ -110,7 +115,9 @@ class ConstraintExperience:
             return None
         merged_metadata = _mapping(metadata)
         trigger_code = str(merged_metadata.get("trigger_code") or "").strip()
-        constraint = str(merged_metadata.get("content") or content or "").strip()
+        constraint = str(
+            merged_metadata.get("constraint") or merged_metadata.get("content") or content or ""
+        ).strip()
         if not trigger_code or not constraint:
             return None
         name = str(

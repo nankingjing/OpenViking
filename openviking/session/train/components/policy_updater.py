@@ -132,6 +132,12 @@ class MemoryFilePolicyUpdater:
         )
 
 
+def _policy_body_metadata(policy: Policy, *, memory_type: str | None = None) -> dict[str, Any]:
+    if (memory_type or policy.metadata.get("memory_type") or "experiences") == "experiences":
+        return {"constraint": policy.content}
+    return {"content": policy.content}
+
+
 def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet) -> PolicySet:
     policies_by_uri = {policy.uri: policy for policy in policy_set.policies}
     result = list(policy_set.policies)
@@ -214,7 +220,7 @@ def _metadata_patch_fields(item: PolicyPlanItem) -> dict[str, Any]:
                 {
                     field_key: field_value
                     for field_key, field_value in value.items()
-                    if field_key != "content"
+                    if field_key not in {"content", "constraint"}
                 }
             )
     return fields
@@ -292,9 +298,9 @@ def _plan_to_resolved_operations(
                 else None,
                 memory_fields={
                     **dict(updated.metadata),
+                    **_policy_body_metadata(updated, memory_type=item.memory_type),
                     "memory_type": item.memory_type or "experiences",
                     "experience_name": updated.name,
-                    "content": updated.content,
                     "status": updated.status,
                 },
                 memory_type=item.memory_type or "experiences",
@@ -345,6 +351,7 @@ def _policy_to_memory_file(policy: Policy | None) -> MemoryFile | None:
         memory_type="experiences",
         extra_fields={
             **dict(policy.metadata),
+            "constraint": policy.content,
             "memory_type": "experiences",
             "experience_name": policy.name,
             "version": policy.version,

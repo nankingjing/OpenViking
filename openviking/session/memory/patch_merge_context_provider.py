@@ -281,7 +281,7 @@ def _memory_file_fields(file: MemoryFile) -> dict[str, Any]:
         fields.pop(hidden_field, None)
     if file.memory_type is not None:
         fields["memory_type"] = file.memory_type
-    if file.content:
+    if file.content and not (file.memory_type == "experiences" and fields.get("constraint")):
         fields["content"] = file.content
     if file.links:
         fields["links"] = file.links

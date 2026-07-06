@@ -189,7 +189,7 @@ def test_memory_file_uses_structured_content_and_trigger_metadata_for_reminder()
         uri="viking://user/u/memories/experiences/refund.md",
         extra_fields={
             "experience_name": "refund_check",
-            "content": "## Situation\n- Refund request\n",
+            "constraint": "## Situation\n- Refund request\n",
             "trigger_code": (
                 'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "refund_order"\n'
             ),

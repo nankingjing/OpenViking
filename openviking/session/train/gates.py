@@ -1100,7 +1100,7 @@ def _experience_constraint_and_trigger(
             if isinstance(value, dict):
                 fields.update(value)
     trigger = str(fields.get("trigger_code") or "").strip()
-    return str(content or "").strip(), trigger
+    return str(fields.get("constraint") or fields.get("content") or content or "").strip(), trigger
 
 
 def _gradient_memory_type(gradient: SemanticGradient) -> str:

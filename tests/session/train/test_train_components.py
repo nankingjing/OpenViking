@@ -999,6 +999,7 @@ def test_experience_memory_schema_includes_constraint_trigger_fields():
 
     assert schema is not None
     fields = {field.name: field for field in schema.fields}
+    assert "constraint" in fields
     assert "trigger_code" in fields
     assert "should_trigger(ctx)" in fields["trigger_code"].description
     assert schema.content_template is not None
@@ -1014,25 +1015,26 @@ def test_experience_content_template_renders_markdown_trigger_section():
     rendered = MemoryFileUtils.write(
         MemoryFile(
             uri="viking://user/u/memories/experiences/refund.md",
-            content="## Situation\n- Refund request",
+            content="",
             memory_type="experiences",
             extra_fields={
                 "memory_type": "experiences",
                 "experience_name": "refund_check",
+                "constraint": "## Situation\n- Refund request",
                 "trigger_code": DEFAULT_TRIGGER_CODE,
             },
         ),
         content_template=schema.content_template,
-        persist_content=True,
     )
 
     assert "# Experience Trigger" in rendered
     assert "- experience_name: refund_check" in rendered
     assert "```python" in rendered
     assert DEFAULT_TRIGGER_CODE.strip() in rendered
-    assert '"content": "## Situation\\n- Refund request"' in rendered
+    assert '"constraint": "## Situation\\n- Refund request"' in rendered
+    assert '"content":' not in rendered
     parsed = MemoryFileUtils.read(rendered)
-    assert parsed.content == "## Situation\n- Refund request"
+    assert parsed.extra_fields["constraint"] == "## Situation\n- Refund request"
 
 
 @pytest.mark.asyncio
@@ -1058,7 +1060,7 @@ async def test_memory_file_policy_updater_persists_valid_trigger_code_from_merge
                     "merge_memory_fields": {
                         "experience_name": "booking_duplicate_handling",
                         "trigger_code": trigger_code,
-                        "content": "new content",
+                        "constraint": "new content",
                     }
                 },
             )
@@ -1074,6 +1076,8 @@ async def test_memory_file_policy_updater_persists_valid_trigger_code_from_merge
     assert result.errors == []
     written = fs.files[policy_set.policies[0].uri]
     assert '"trigger_code":' in written
+    assert '"constraint": "new content"' in written
+    assert '"content":' not in written
     assert "should_trigger" in written
 
 

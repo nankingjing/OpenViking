@@ -106,8 +106,7 @@ class PatchMergePolicyOptimizer:
             "gradient_count": len(gradients),
             "patch_gradient_count": len(patch_gradients),
             "gradients": [
-                _gradient_to_dict(idx, gradient)
-                for idx, gradient in enumerate(patch_gradients)
+                _gradient_to_dict(idx, gradient) for idx, gradient in enumerate(patch_gradients)
             ],
         }
         gate_retry_reports = list(context.metadata.get("gate_retry_reports", []) or [])
@@ -238,11 +237,13 @@ def _preview_instruction(instruction: str, *, limit: int = 500) -> str:
         return text
     return text[: limit - 3] + "..."
 
+
 def _constant_prefetch(messages: list[dict[str, Any]]):
     async def prefetch() -> list[dict[str, Any]]:
         return list(messages)
 
     return prefetch
+
 
 def _log_merge_input(
     *,
@@ -291,6 +292,7 @@ def _log_merge_input(
     lines.append("===================================================\n")
     tracer.info("\n".join(lines), console=console)
 
+
 def _log_merge_output(
     *,
     target: str,
@@ -327,6 +329,7 @@ def _log_merge_output(
     lines.append("====================================================\n")
     tracer.info("\n".join(lines), console=console)
 
+
 def _dump_model_or_value(value: Any) -> str:
     dumper = getattr(value, "model_dump_json", None)
     if dumper is not None:
@@ -335,6 +338,7 @@ def _dump_model_or_value(value: Any) -> str:
         except TypeError:
             return str(dumper())
     return str(value)
+
 
 def _memory_file_summary(file: MemoryFile | None) -> str:
     if file is None:
@@ -349,6 +353,7 @@ def _memory_file_summary(file: MemoryFile | None) -> str:
             "extra_fields": file.extra_fields,
         }
     )
+
 
 def _gradient_to_dict(index: int, gradient: SemanticGradient) -> dict[str, Any]:
     result = {
@@ -369,6 +374,7 @@ def _gradient_to_dict(index: int, gradient: SemanticGradient) -> dict[str, Any]:
         result["after_file"] = _memory_file_to_dict(after_file)
     return result
 
+
 def _memory_file_to_dict(file: MemoryFile) -> dict[str, Any]:
     return {
         "uri": file.uri,
@@ -382,6 +388,7 @@ def _memory_file_to_dict(file: MemoryFile) -> dict[str, Any]:
 
 def _links_to_dicts(links: list[StoredLink] | None) -> list[dict[str, Any]]:
     return [link.model_dump() for link in links or []]
+
 
 def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
     return PatchMergePatch(
@@ -397,12 +404,20 @@ def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
     )
 
 
+def _experience_constraint_text(fields: dict[str, Any]) -> str:
+    return str(fields.get("constraint") or fields.get("content") or "")
+
+
 def _compact_gradient_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     compact = dict(metadata)
     memory_fields = compact.get("memory_fields")
-    if isinstance(memory_fields, dict) and "content" in memory_fields:
+    if isinstance(memory_fields, dict) and (
+        "content" in memory_fields or "constraint" in memory_fields
+    ):
         compact["memory_fields"] = {
-            key: value for key, value in memory_fields.items() if key != "content"
+            key: value
+            for key, value in memory_fields.items()
+            if key not in {"content", "constraint"}
         }
     return compact
 
@@ -420,6 +435,7 @@ def _required_file_uris(
         if uri and uri not in uris:
             uris.append(uri)
     return uris
+
 
 def _seed_read_file_contents(
     provider: PatchMergeContextProvider,
@@ -456,6 +472,7 @@ def _policy_to_memory_file(policy: Policy, *, memory_type: str = "experiences") 
         extra_fields=extra_fields,
     )
 
+
 def _operations_to_plan_items(
     *,
     operations: Any,
@@ -477,7 +494,7 @@ def _operations_to_plan_items(
         if getattr(op, "memory_type", None) != memory_type:
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        after_content = str(fields.get("content") or "")
+        after_content = _experience_constraint_text(fields)
         if not after_content.strip():
             continue
         target_name = str(
@@ -522,9 +539,7 @@ def _operations_to_plan_items(
                     "rationale": "PatchMergeContextProvider merged semantic gradients via ExtractLoop.",
                     "merge_gradient_count": len(gradients),
                     "merge_memory_fields": fields,
-                    "superseded_experience_uris": [
-                        policy.uri for policy in superseded_policies
-                    ],
+                    "superseded_experience_uris": [policy.uri for policy in superseded_policies],
                 },
             )
         )
@@ -616,6 +631,7 @@ def _fallback_policy_name(op: Any, *, memory_type: str) -> str:
                 return parts[-2]
         return uri.rstrip("/").split("/")[-1].removesuffix(".md")
     return f"unknown_{memory_type.rstrip('s')}"
+
 
 def _source_trajectory_links_from_experience(policy: Policy | None) -> list[StoredLink]:
     if policy is None:
@@ -764,11 +780,7 @@ def _plan_item_source_keys(
     # without turning duplicate-content batches into a broadcast.
     content = str(after_content or "").strip()
     if content:
-        matches = [
-            key
-            for key in all_keys
-            if key[0] == "content" and key[1].strip() == content
-        ]
+        matches = [key for key in all_keys if key[0] == "content" and key[1].strip() == content]
         if len(matches) == 1:
             add(matches[0])
 
@@ -859,7 +871,7 @@ def _upsert_output_count(operations: Any, *, memory_type: str) -> int:
         if getattr(op, "memory_type", None) != memory_type:
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        if str(fields.get("content") or "").strip():
+        if _experience_constraint_text(fields).strip():
             count += 1
     return count
 
@@ -902,6 +914,7 @@ def _find_policy_by_uri(policy_set: PolicySet, uri: str) -> Policy | None:
         if policy.uri == uri:
             return policy
     return None
+
 
 def _base_version_from_old_file_or_policy(
     old_file: Any, target_uri: str | None, policy_set: PolicySet

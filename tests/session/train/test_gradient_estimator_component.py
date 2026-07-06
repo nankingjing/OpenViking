@@ -117,7 +117,8 @@ async def test_experience_gradient_estimator_converts_experience_operations():
                 memory_type="experiences",
                 memory_fields={
                     "experience_name": "booking_duplicate_handling",
-                    "content": "new body",
+                    "constraint": "## Failure Pattern\n- Wrong boundary: book_reservation\n\n## Repair Procedure\n- Before calling book_reservation: check duplicate booking.\n\n## Guardrails\n- Only applies to duplicate booking candidates.",
+                    "trigger_code": 'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "book_reservation"\n',
                     "supersedes": ["older_experience"],
                 },
                 uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
@@ -143,7 +144,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     )
     assert gradient.base_version == 7
     assert gradient.before_file is old_file
-    assert gradient.after_file.content == "new body"
+    assert "## Failure Pattern" in gradient.after_file.content
     assert gradient.after_file.extra_fields["supersedes"] == ["older_experience"]
     assert gradient.metadata["supersedes"] == ["older_experience"]
     assert len(gradient.links) == 1
@@ -166,7 +167,10 @@ async def test_experience_gradient_estimator_uses_policy_version_for_newer_old_f
         upsert_operations=[
             SimpleNamespace(
                 memory_type="experiences",
-                memory_fields={"content": "replacement body"},
+                memory_fields={
+                    "constraint": "## Failure Pattern\n- Wrong boundary: book_reservation\n\n## Repair Procedure\n- Before calling book_reservation: check duplicate booking.\n\n## Guardrails\n- Only applies to duplicate booking candidates.",
+                    "trigger_code": 'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "book_reservation"\n',
+                },
                 uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
                 old_memory_file_content=None,
             )
@@ -181,7 +185,7 @@ async def test_experience_gradient_estimator_uses_policy_version_for_newer_old_f
     assert gradient.target_name == "booking_duplicate_handling"
     assert gradient.base_version == 3
     assert gradient.before_file is None
-    assert gradient.after_file.content == "replacement body"
+    assert "## Failure Pattern" in gradient.after_file.content
     assert gradient.confidence == pytest.approx(0.3)
 
 

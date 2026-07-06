@@ -10,7 +10,7 @@ enabled: true
 operation_mode: "upsert"
 agent_only: true
 content_template: |
-  {{ content }}
+  {{ constraint|default(content, true) }}
 
   # Experience Trigger
   - experience_name: {{ experience_name }}
@@ -29,7 +29,7 @@ fields:
       Good: "booking_duplicate_handling", "pytest_asyncio_cancel_hang_fix", "重复预订处理".
     merge_op: immutable
 
-  - name: content
+  - name: constraint
     type: string
     description: |
       Natural-language content must be written in {{ language }}. Keep fixed section headings,

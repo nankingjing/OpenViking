@@ -193,7 +193,6 @@ async def _evaluate_experience_gradients(
     )
 
 
-
 def _post_validation_retry_event(
     *,
     stage: str,
@@ -219,6 +218,7 @@ def _preview_instruction(instruction: str, *, limit: int = 500) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
 
 def _record_gate_report(
     report: Any,
@@ -265,6 +265,10 @@ def _context_with_analysis_messages(
     )
 
 
+def _experience_constraint_text(fields: dict[str, Any]) -> str:
+    return str(fields.get("constraint") or fields.get("content") or "")
+
+
 def _operations_to_gradients(
     *,
     operations: Any,
@@ -277,7 +281,7 @@ def _operations_to_gradients(
         if getattr(op, "memory_type", None) != "experiences":
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        after_content = str(fields.get("content") or "")
+        after_content = _experience_constraint_text(fields)
         if not after_content.strip():
             continue
 
@@ -357,11 +361,13 @@ def _operation_after_file(
     for key, value in fields.items():
         if key != "content":
             extra_fields[key] = value
+    if "constraint" not in extra_fields and fields.get("content"):
+        extra_fields["constraint"] = str(fields.get("content") or "")
     extra_fields["memory_type"] = "experiences"
     extra_fields["experience_name"] = target_name
     return MemoryFile(
         uri=target_uri,
-        content=str(fields.get("content") or ""),
+        content=_experience_constraint_text(fields),
         links=list(getattr(old_file, "links", []) or []),
         backlinks=list(getattr(old_file, "backlinks", []) or []),
         memory_type="experiences",

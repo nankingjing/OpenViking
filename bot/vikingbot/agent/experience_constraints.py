@@ -33,7 +33,9 @@ class ConstraintExperience:
             return None
         merged_metadata = _mapping(metadata)
         trigger_code = str(merged_metadata.get("trigger_code") or "").strip()
-        constraint = str(merged_metadata.get("content") or content or "").strip()
+        constraint = str(
+            merged_metadata.get("constraint") or merged_metadata.get("content") or content or ""
+        ).strip()
         if not trigger_code or not constraint:
             return None
         name = str(

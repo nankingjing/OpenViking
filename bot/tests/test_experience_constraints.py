@@ -15,7 +15,7 @@ def test_constraint_experience_uses_structured_metadata():
         uri="viking://user/u/memories/experiences/refund.md",
         metadata={
             "experience_name": "refund_check",
-            "content": "## Situation\n- Refund request.",
+            "constraint": "## Situation\n- Refund request.",
             "trigger_code": (
                 'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "refund_order"\n'
             ),
@@ -115,7 +115,7 @@ async def test_memory_store_reads_constraint_experience_from_structured_metadata
             {
                 "uri": uri,
                 "experience_name": "refund_check",
-                "content": "## Situation\n- Refund request.",
+                "constraint": "## Situation\n- Refund request.",
                 "trigger_code": (
                     "def should_trigger(ctx):\n"
                     '    return ctx.get("candidate_tool") == "refund_order"\n'
