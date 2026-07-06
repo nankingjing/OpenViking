@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.connector.client import ConnectorClient
 from openviking.core.content_targets import ContentTargetSpec
 from openviking.core.uri_validation import validate_optional_content_target_uri
 from openviking.resource.feishu_watch_auth import (
@@ -54,6 +55,7 @@ from openviking.utils.skill_processor import SkillProcessingPreparation, SkillPr
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
+    InternalError,
     InvalidArgumentError,
     NotInitializedError,
 )
@@ -654,6 +656,24 @@ class ResourceService:
             if default_parent:
                 parent = default_parent
                 kwargs["create_parent"] = True
+
+        if self._should_use_connector(args):
+            return await self._add_resource_via_connector(
+                path=path,
+                ctx=ctx,
+                to=to,
+                parent=parent,
+                reason=reason,
+                connector_args=args or {},
+                watch_interval=watch_interval,
+                build_index=build_index,
+                summarize=summarize,
+                skip_watch_management=skip_watch_management,
+                stage_callback=stage_callback,
+                normalized_args=normalized_args,
+                **kwargs,
+            )
+
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
@@ -1128,6 +1148,217 @@ class ResourceService:
         finally:
             request_wait_tracker.cleanup(telemetry_id)
             unregister_wait_telemetry(telemetry_id)
+
+    # ── Connector routing ──
+
+    def _should_use_connector(self, args: Optional[Dict[str, Any]]) -> bool:
+        """Decide whether to delegate this add_resource to the Connector service."""
+        from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+        config = get_openviking_config().connector
+        if not config.enable:
+            return False
+        if not args or "add_type" not in args:
+            return False
+        if args["add_type"] not in config.allowed_add_types:
+            logger.info(
+                f"[ResourceService] add_type '{args['add_type']}' not in "
+                f"connector.allowed_add_types {config.allowed_add_types}, "
+                "falling back to the standard pipeline"
+            )
+            return False
+        return True
+
+    async def _add_resource_via_connector(
+        self,
+        path: str,
+        ctx: RequestContext,
+        to: Optional[str],
+        parent: Optional[str],
+        reason: str,
+        connector_args: Dict[str, Any],
+        watch_interval: float,
+        build_index: bool,
+        summarize: bool,
+        skip_watch_management: bool,
+        stage_callback: Optional[Callable[[str], Any]],
+        normalized_args: _NormalizedAddResourceArgs,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Route add_resource to the external Connector service."""
+        from openviking.service.task_tracker import get_task_tracker
+
+        from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+        config = get_openviking_config().connector
+        if not ctx.api_key:
+            raise InvalidArgumentError(
+                "Connector import requires an API key in the request."
+            )
+
+        target = ContentTargetSpec.from_fields(
+            ctx=ctx,
+            kind="resource",
+            to=to,
+            parent=parent,
+            create_parent=bool(kwargs.get("create_parent", False)),
+        )
+        resource_id = target.to or path
+
+        client = ConnectorClient(
+            doc_add_url=config.connector,
+            task_info_url=config.tracker,
+            account_id=config.main_account_id,
+        )
+
+        add_type = connector_args["add_type"]
+        extra_params: Dict[str, Any] = {}
+        reserved = {"add_type", "tos_path", "path_prefix", "include_child"}
+        for k, v in connector_args.items():
+            if k not in reserved:
+                extra_params[k] = v
+
+        result = await client.submit_doc_add(
+            resource_id=resource_id,
+            add_type=add_type,
+            api_key=ctx.api_key,
+            tos_path=connector_args.get("tos_path"),
+            path_prefix=connector_args.get("path_prefix"),
+            include_child=connector_args.get("include_child", True),
+            extra_params=extra_params or None,
+        )
+
+        connector_task_key = result.get("task_key") or result.get("TaskKey") or ""
+        if not connector_task_key:
+            raise InternalError(
+                f"Connector accepted the import but returned no task key: {result}"
+            )
+
+        task_tracker = get_task_tracker()
+        task = await task_tracker.create(
+            "connector_import",
+            resource_id=resource_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+
+        background = asyncio.create_task(
+            self._monitor_connector_task(
+                client=client,
+                connector_task_key=connector_task_key,
+                ov_task_id=task.task_id,
+                resource_id=resource_id,
+                poll_interval_ms=config.poll_interval_ms,
+                timeout_seconds=config.timeout_seconds,
+                ctx=ctx,
+            )
+        )
+        self._background_tasks.add(background)
+        background.add_done_callback(self._background_tasks.discard)
+
+        if not skip_watch_management and watch_interval > 0:
+            watch_manager = self._get_watch_manager()
+            if watch_manager:
+                watch_to = target.to or resource_id
+                processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
+                processor_kwargs["connector_args"] = connector_args
+                try:
+                    await self._handle_watch_task_creation(
+                        path=path,
+                        to_uri=watch_to,
+                        parent_uri=target.parent,
+                        reason=reason,
+                        instruction="",
+                        watch_interval=watch_interval,
+                        build_index=build_index,
+                        summarize=summarize,
+                        processor_kwargs=processor_kwargs,
+                        auth_state=normalized_args.watch_auth_state,
+                        ctx=ctx,
+                    )
+                except ConflictError:
+                    raise
+                except Exception as e:
+                    logger.warning(
+                        f"[ResourceService] Failed to create watch task for connector import: {e}"
+                    )
+
+        return {
+            "status": "accepted",
+            "task_id": task.task_id,
+            "connector_task_key": connector_task_key,
+            "resource_id": resource_id,
+        }
+
+    async def _monitor_connector_task(
+        self,
+        client: ConnectorClient,
+        connector_task_key: str,
+        ov_task_id: str,
+        resource_id: str,
+        poll_interval_ms: int,
+        timeout_seconds: int,
+        ctx: RequestContext,
+    ) -> None:
+        """Poll the Connector task until terminal state, then update OV TaskRecord."""
+        from openviking.service.task_tracker import get_task_tracker
+
+        task_tracker = get_task_tracker()
+        await task_tracker.start(
+            ov_task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+
+        poll_interval = poll_interval_ms / 1000.0
+        deadline = time.perf_counter() + timeout_seconds
+        terminal_statuses = {"succeeded", "failed", "cancelled"}
+
+        try:
+            while time.perf_counter() < deadline:
+                await asyncio.sleep(poll_interval)
+                info = await client.get_task_info(connector_task_key)
+                status = (info.get("Status") or info.get("status") or "").lower()
+
+                await task_tracker.update_stage(
+                    ov_task_id,
+                    f"connector:{status}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+
+                if status in terminal_statuses:
+                    if status == "succeeded":
+                        await task_tracker.complete(
+                            ov_task_id,
+                            {"connector_status": status, "connector_task_key": connector_task_key},
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                        )
+                    else:
+                        error_msg = info.get("ErrorMessage") or info.get("error_message") or status
+                        await task_tracker.fail(
+                            ov_task_id,
+                            f"connector task {status}: {error_msg}",
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                        )
+                    return
+
+            await task_tracker.fail(
+                ov_task_id,
+                f"connector task timed out after {timeout_seconds}s",
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        except Exception as exc:
+            logger.error(f"[ResourceService] Connector task monitor error: {exc}")
+            await task_tracker.fail(
+                ov_task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
 
     async def _handle_watch_task_creation(
         self,
