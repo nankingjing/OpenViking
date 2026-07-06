@@ -42,7 +42,7 @@ def test_constraint_experience_uses_structured_metadata():
     assert "should_trigger" not in result.messages[-1]["content"]
 
 
-def test_constraint_experience_ignores_template_rendered_metadata_without_structured_fields():
+def test_constraint_experience_parses_template_rendered_metadata_from_body():
     exp = ConstraintExperience.from_content_and_fields(
         (
             "## Situation\n"
@@ -58,7 +58,10 @@ def test_constraint_experience_ignores_template_rendered_metadata_without_struct
         uri="viking://user/u/memories/experiences/refund.md",
     )
 
-    assert exp is None
+    assert exp is not None
+    assert exp.name == "refund_check"
+    assert "should_trigger" in exp.trigger_code
+    assert exp.constraint == "## Situation\n- Refund request"
 
 
 def test_vikingbot_trigger_supports_regex_helpers_after_tool_gate():

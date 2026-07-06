@@ -32,15 +32,23 @@ class ConstraintExperience:
         if not uri:
             return None
         merged_metadata = _mapping(metadata)
-        trigger_code = str(merged_metadata.get("trigger_code") or "").strip()
+        parsed = _parse_rendered_experience_trigger(content)
+        trigger_code = str(
+            merged_metadata.get("trigger_code") or parsed.get("trigger_code") or ""
+        ).strip()
         constraint = str(
-            merged_metadata.get("constraint") or merged_metadata.get("content") or content or ""
+            merged_metadata.get("constraint")
+            or merged_metadata.get("content")
+            or parsed.get("constraint")
+            or content
+            or ""
         ).strip()
         if not trigger_code or not constraint:
             return None
         name = str(
             merged_metadata.get("experience_name")
             or merged_metadata.get("name")
+            or parsed.get("experience_name")
             or fallback_name
             or uri.rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
         )
@@ -264,8 +272,10 @@ _ALLOWED_BUILTINS: dict[str, Any] = {
     "list": list,
     "max": max,
     "min": min,
+    "range": range,
     "regex_match": _regex_match,
     "regex_search": _regex_search,
+    "reversed": reversed,
     "set": set,
     "str": str,
     "sum": sum,
@@ -274,11 +284,19 @@ _ALLOWED_BUILTINS: dict[str, Any] = {
 _ALLOWED_METHODS = {
     "count",
     "endswith",
+    "casefold",
+    "find",
     "get",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isdigit",
     "items",
     "keys",
     "lower",
     "replace",
+    "rfind",
+    "rindex",
     "split",
     "startswith",
     "strip",
@@ -478,6 +496,33 @@ def _readonly_json(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return tuple(_readonly_json(v) for v in value)
     return str(value)
+
+
+def _parse_rendered_experience_trigger(content: str) -> dict[str, str]:
+    text = str(content or "")
+    section_match = re.search(
+        r"(?ims)^#{1,6}\s*Experience\s+Trigger\s*\n(?P<section>.*?)(?=^#{1,6}\s+|\Z)",
+        text,
+    )
+    if not section_match:
+        return {}
+
+    section = section_match.group("section")
+    parsed: dict[str, str] = {}
+    name_match = re.search(r"(?im)^\s*-?\s*experience_name\s*:\s*(?P<name>[^\n]+)", section)
+    if name_match:
+        parsed["experience_name"] = name_match.group("name").strip().strip("` ")
+    trigger_match = re.search(
+        r"(?is)trigger_code\s*:\s*```(?:python)?\s*(?P<code>.*?)\s*```",
+        section,
+    )
+    if trigger_match:
+        parsed["trigger_code"] = trigger_match.group("code").strip()
+
+    constraint = (text[: section_match.start()] + text[section_match.end() :]).strip()
+    if constraint:
+        parsed["constraint"] = constraint
+    return parsed
 
 
 def _mapping(value: Any) -> dict[str, Any]:
