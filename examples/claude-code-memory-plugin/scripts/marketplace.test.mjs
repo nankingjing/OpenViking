@@ -51,3 +51,16 @@ test("Claude .mcp.json starts the stdio MCP proxy", () => {
   assert.ok(!("url" in server), ".mcp.json should not keep direct HTTP url");
   execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
 });
+
+test("Claude hooks include optional skill experience PostToolUse Read hook", () => {
+  const hooks = readJson(join(pluginDir, "hooks", "hooks.json"));
+  const postToolUse = hooks.hooks?.PostToolUse;
+  assert.ok(Array.isArray(postToolUse), "hooks.json must define PostToolUse hooks");
+  const readHook = postToolUse.find((entry) => entry?.matcher === "Read");
+  assert.ok(readHook, "PostToolUse must include a Read matcher");
+  assert.equal(
+    readHook.hooks?.[0]?.command,
+    "node ${CLAUDE_PLUGIN_ROOT}/scripts/skill-experience.mjs",
+  );
+  execFileSync("node", ["--check", join(pluginDir, "scripts", "skill-experience.mjs")], { stdio: "pipe" });
+});
