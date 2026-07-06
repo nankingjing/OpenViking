@@ -13,6 +13,7 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { deriveCodexSessionId } from "./shared/session-model.mjs";
 
 const DEFAULT_STATE_DIR = join(homedir(), ".openviking", "codex-plugin-state");
 
@@ -24,9 +25,7 @@ function safeId(codexSessionId) {
   return String(codexSessionId).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-export function deriveOvSessionId(codexSessionId) {
-  return `cx-${safeId(codexSessionId || "unknown")}`;
-}
+export { deriveCodexSessionId as deriveOvSessionId };
 
 export function resolveOvSessionId(state) {
   // Always derive the deterministic cx-* id. Legacy persisted UUIDs from
