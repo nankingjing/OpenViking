@@ -12,7 +12,7 @@ Long-term semantic memory for Claude Code, powered by [OpenViking](https://githu
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
 ```
 
-macOS / Linux only. The script verifies dependencies, asks whether you'll connect to a **self-hosted** server or to **Volcengine OpenViking Cloud** (`https://api.vikingdb.cn-beijing.volces.com/openviking`), sets up `~/.openviking/ovcli.conf` (prompts only if absent), clones the repo to `~/.openviking/openviking-repo`, adds the `claude` shell-function wrapper to your rc, and runs `claude plugin install`. Re-running is safe.
+macOS / Linux only. The script is a thin entry point to the shared OpenViking memory installer: it verifies dependencies, sets up `~/.openviking/ovcli.conf`, installs `openviking-memory`, removes the old local plugin id if present, and uses the stdio MCP proxy so no shell wrapper or `.mcp.json` rendering is needed. Re-running is safe.
 
 If you'd rather do it by hand, follow the four steps below.
 
@@ -51,10 +51,10 @@ The repo's `examples/.claude-plugin/marketplace.json` exposes the plugin as a lo
 
 ```bash
 claude plugin marketplace add "$(pwd)/examples"
-claude plugin install claude-code-memory-plugin@openviking-plugins-local
+claude plugin install openviking-memory@openviking-plugins-local
 ```
 
-> Both commands install at user scope by default — the plugin is active from any directory. We don't pass `--scope user` explicitly because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag. On newer builds that do accept `--scope`, you can lift a local-scoped install to user scope with `claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user`.
+> Both commands install at user scope by default — the plugin is active from any directory. We don't pass `--scope user` explicitly because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag. On newer builds that do accept `--scope`, you can lift a local-scoped install to user scope with `claude plugin enable openviking-memory@openviking-plugins-local --scope user`.
 >
 > The marketplace entry points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. A public marketplace listing for one-click install will follow.
 
@@ -82,7 +82,7 @@ jq -e . /tmp/ov-settings.json >/dev/null && mv /tmp/ov-settings.json ~/.claude/s
 rm -f /tmp/ov-hooks.json
 ```
 
-The single-quoted `${VAR}` literals in `claude mcp add` are intentional — Claude Code expands them at MCP launch time using whatever the shell wrapper injects. Don't switch to double quotes; your shell would expand them to empty strings before the command runs. The one-line installer does all of this for you and prompts before touching `~/.claude/settings.json`.
+The single-quoted `${VAR}` literals in `claude mcp add` are intentional for legacy mode: Claude Code expands them at MCP launch time. Don't switch to double quotes; your shell would expand them to empty strings before the command runs.
 
 #### 4. Start Claude Code
 
@@ -94,51 +94,11 @@ If it doesn't seem to fire, set `OPENVIKING_DEBUG=1` and check `~/.openviking/lo
 
 ## Configuring MCP
 
-The plugin's hooks read `ovcli.conf` / `ov.conf` automatically. The bundled **MCP server entry does not** — Claude Code parses `.mcp.json` itself and supports **only `${VAR}` substitution**, so the plugin can't transparently feed config-file values into the MCP server URL or auth headers.
+The plugin's hooks and MCP entry now use the same configuration chain. The checked-in `.mcp.json` starts `servers/mcp-proxy.mjs` as a local stdio MCP server; that proxy reads `OPENVIKING_*`, `~/.openviking/ovcli.conf`, and `~/.openviking/ov.conf`, then forwards JSON-RPC to the OpenViking server's native `/mcp` endpoint with the right auth and identity headers.
 
-**Decision tree — do you need to do anything?**
+For normal plugin installs, there is nothing extra to export and no `.mcp.json` value to render. Update `ovcli.conf` or the relevant `OPENVIKING_*` env vars and restart Claude Code; the proxy will use the same target as the hook scripts.
 
-```
-Where is your OpenViking server?
-├─ Local (127.0.0.1, no auth)
-│    └─ ✅ Nothing to do — the bundled .mcp.json already works.
-└─ Remote
-     └─ ✅ Add the function-wrapper below to your shell rc.
-```
-
-**Recommended path — wrap `claude` to inject env from `ovcli.conf` on each invocation:**
-
-```bash
-# ~/.zshrc or ~/.bashrc
-claude() {
-  local _ov_conf="${OPENVIKING_CLI_CONFIG_FILE:-$HOME/.openviking/ovcli.conf}"
-  if [ -f "$_ov_conf" ] && command -v jq >/dev/null 2>&1; then
-    local _ov_url _ov_key
-    _ov_url=$(jq -r '.url // empty'     "$_ov_conf" 2>/dev/null)
-    _ov_key=$(jq -r '.api_key // empty' "$_ov_conf" 2>/dev/null)
-    OPENVIKING_URL="${OPENVIKING_URL:-$_ov_url}" \
-    OPENVIKING_API_KEY="${OPENVIKING_API_KEY:-$_ov_key}" \
-      command claude "$@"
-  else
-    command claude "$@"
-  fi
-}
-```
-
-Re-source your rc (`source ~/.zshrc`, or `source ~/.bashrc` on bash) and restart `claude` — `/mcp` should then show your remote URL with valid auth.
-
-**Wrapping extra launch commands.** If you start Claude Code through a different command — a custom wrapper like `cc-custom`, or a multi-word launcher (a base command plus a sub-command) — the installer can wrap those too. Answer its "Extra launch commands" prompt, or pass `OPENVIKING_CC_WRAP_EXTRA='cc-custom'` when running it. The list is stored in the same rc marker block (read by the wrapper as `$OPENVIKING_CC_WRAP_EXTRA`); for a multi-word entry, only invocations whose leading args match the sub-command get credentials injected, so every *other* use of that command passes through untouched. List the *real* launch command, never a shell alias of it: an alias expands to its target before the wrapper runs, so wrap what it points at — `alias cc=claude` already rides the base `claude` wrapper (add nothing), while `alias cc=claude-custom` is covered by listing `claude-custom`. Alias names are skipped if listed.
-
-> **Why a function instead of `export`?** A globally exported API key leaks into every child process spawned from your shell — npm scripts, build tools, crash dumps, `/proc/<pid>/environ`. The function wrapper limits the secret to the `claude` process tree only.
->
-> Don't have `ovcli.conf` yet? See the [Deployment Guide → CLI](../../docs/en/guides/03-deployment.md#cli) to set one up.
-
-**Other options if the function wrapper isn't viable:**
-
-- **Edit the plugin's `.mcp.json` directly** with hardcoded values. Future plugin updates may overwrite it.
-- **Add a separate MCP entry** to your project `.mcp.json` or `~/.claude.json`. See the [MCP integration guide](../../docs/en/guides/06-mcp-integration.md).
-
-**Symptom of misconfiguration**: hooks (auto-recall, auto-capture) work fine because they read config files via Node, but the on-demand MCP tools (`search`, `read`, `store`, …) silently connect to `http://127.0.0.1:1933` with empty auth headers, and `/mcp` shows the wrong URL.
+The proxy requires Node.js 18+ and writes debug logs only when `OPENVIKING_DEBUG=1` or `claude_code.debug=true` is configured. stdout is reserved for MCP protocol bytes.
 
 ## Configuration
 
@@ -151,11 +111,11 @@ Every plugin field follows this chain (highest → lowest):
 3. **`ov.conf`** — server config (`~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE`); the plugin reads `server.url`, `server.root_api_key`, and a legacy `claude_code` block if present (see [Legacy `claude_code` block](#legacy-claude_code-block-in-ovconf))
 4. **Built-in defaults** (`http://127.0.0.1:1933`, no auth)
 
-> ⚠️ **Hooks only.** This chain is implemented in `scripts/config.mjs` and consumed by hook scripts. It does **not** apply to MCP server registration — see [Configuring MCP](#configuring-mcp).
+The same connection and identity fields are also used by the stdio MCP proxy.
 
 ### Environment variables
 
-All plugin behavior can be set via env vars. Connection / identity vars affect both hooks and (when exported in your shell rc) the MCP server; tuning vars only affect hooks.
+All plugin behavior can be set via env vars. Connection / identity vars affect both hooks and the MCP proxy; tuning vars only affect hooks.
 
 #### Connection / identity
 
@@ -305,7 +265,7 @@ Set `claude_code.debug: true` in `ov.conf` or `OPENVIKING_DEBUG=1` to write hook
 | Plugin not activating                      | No `ov.conf` / `ovcli.conf` found                            | Create one, or set `OPENVIKING_MEMORY_ENABLED=1` plus the URL/API_KEY env vars                     |
 | Hooks fire but recall is empty             | OpenViking server not running, or wrong URL                  | `curl http://localhost:1933/health` (or your remote URL)                                           |
 | Auto-capture extracts 0 memories           | Wrong embedding/extraction model in `ov.conf`                | Check `embedding` / `vlm` config; review server logs                                               |
-| MCP tools hit `127.0.0.1` instead of remote| `.mcp.json` only resolves `${VAR}`, no ovcli.conf integration | See [Configuring MCP](#configuring-mcp) — export env vars or edit `.mcp.json` |
+| MCP tools hit the wrong server              | stale `ovcli.conf` / env vars, or Claude Code not restarted after config change | See [Configuring MCP](#configuring-mcp), verify `~/.openviking/ovcli.conf`, then restart Claude Code |
 | Remote auth 401 / 403                      | API key / account / user header mismatch                     | Verify `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER` (or their `ov.conf` counterparts) |
 | `Stop` hook times out                      | Server slow + sync write path                                | Leave `writePathAsync: true` (default), or raise the `Stop` timeout in `hooks/hooks.json`          |
 | Old context keeps re-appearing in OV       | Pre-fix versions captured the recall block back into OV      | Update to current version — `auto-capture` now strips `<openviking-context>` before pushing        |
@@ -343,14 +303,14 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
      │   └───────────────────────┘   │           │     │  Server      │
      │                               │           │     │  (Python)    │
      │                  ┌────────────▼───────────▼───►│              │
-     │                  │  MCP tools (HTTP /mcp)      │              │
+     │                  │  MCP tools (stdio proxy → /mcp)            │
      │                  │  search / read / store / …  │              │
      └─────────────────►│                             │              │
         OV session      └─────────────────────────────►              │
         context inject                                └──────────────┘
 ```
 
-There is no bundled MCP server, no TypeScript build step, and no runtime npm bootstrap. Hooks are plain `.mjs` files that talk to OpenViking over HTTP; MCP comes from the OpenViking server's `/mcp` endpoint.
+There is no TypeScript build step and no runtime npm bootstrap. Hooks are plain `.mjs` files that talk to OpenViking over HTTP; MCP uses `servers/mcp-proxy.mjs` as a zero-dependency stdio bridge to the OpenViking server's `/mcp` endpoint.
 
 A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<sha256(cc_session_id)>`, so resume / compact / multi-hook events all target the same session, and OV's `auto_commit_threshold` drives archival + memory extraction naturally.
 
@@ -378,7 +338,7 @@ Disable with `claude_code.writePathAsync: false` if you need deterministic order
 
 ### MCP tools available from the server
 
-The plugin's `.mcp.json` connects to the OpenViking server's native HTTP MCP endpoint at `/mcp`. The server exposes 9 tools that Claude can call on demand:
+The plugin's `.mcp.json` starts a local stdio proxy, which connects to the OpenViking server's native HTTP MCP endpoint at `/mcp`. The server exposes 9 tools that Claude can call on demand:
 
 | Tool           | Description                                                 |
 |----------------|-------------------------------------------------------------|
@@ -402,6 +362,8 @@ claude-code-memory-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
 │   └── hooks.json           # 7 hook registrations
+├── servers/
+│   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp bridge
 ├── scripts/
 │   ├── config.mjs           # shared config loader (env > ovcli.conf > ov.conf)
 │   ├── debug-log.mjs        # log helper for ~/.openviking/logs/cc-hooks.log
@@ -417,7 +379,7 @@ claude-code-memory-plugin/
 │   └── lib/
 │       ├── ov-session.mjs   # OV HTTP client + session helpers + bypass check
 │       └── async-writer.mjs # detached-worker helper for write-path hooks
-├── .mcp.json                # MCP server config (HTTP /mcp on OpenViking)
+├── .mcp.json                # MCP server config (local stdio proxy)
 ├── package.json             # type:module marker only — no runtime deps
 └── README.md
 ```

@@ -4,7 +4,7 @@
 #
 # For users who can't reach github.com / raw.githubusercontent.com. Pulls both
 # the installer and the source archive from Volcengine TOS instead of GitHub,
-# then hands off to the standard interactive installer.
+# then hands off to the shared memory plugin installer with Codex selected.
 #
 # One-liner:
 #   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/codex-memory-plugin/tos-install.sh)
@@ -25,5 +25,5 @@ export OPENVIKING_REPO_ARCHIVE_URL="${OPENVIKING_REPO_ARCHIVE_URL:-$TOS_BASE/rel
 # URL above instead of git clone.
 installer=$(mktemp "${TMPDIR:-/tmp}/ov-codex-install.XXXXXX") || { echo "mktemp failed" >&2; exit 1; }
 trap 'rm -f "$installer"' EXIT
-curl -fsSL -o "$installer" "$TOS_BASE/codex-memory-plugin/install.sh"
-bash "$installer"
+curl -fsSL -o "$installer" "$TOS_BASE/memory-plugin-shared/install.sh"
+bash "$installer" --harness codex

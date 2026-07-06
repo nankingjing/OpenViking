@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,23 +55,6 @@ function hasCredentialFields(obj) {
     "actor_peer_id",
     "peer_id",
   ].some((key) => typeof obj[key] === "string");
-}
-
-function normalizeAuthMode(val) {
-  const mode = str(val, "").toLowerCase();
-  return ["trusted", "api_key"].includes(mode) ? mode : "";
-}
-
-function resolveAuthMode(creds, env = process.env) {
-  const cx = creds.ovFile.codex || {};
-  const server = creds.ovFile.server || {};
-  return (
-    normalizeAuthMode(env.OPENVIKING_AUTH_MODE) ||
-    normalizeAuthMode(cx.authMode) ||
-    normalizeAuthMode(cx.auth_mode) ||
-    normalizeAuthMode(server.auth_mode) ||
-    ((creds.account || creds.user) ? "trusted" : "api_key")
-  );
 }
 
 export function loadCredentialFiles(env = process.env) {
@@ -188,128 +170,8 @@ export function resolveOpenVikingCredentials(env = process.env) {
   };
 }
 
-function shellQuote(value) {
-  return `'${String(value ?? "").replace(/'/g, "'\\''")}'`;
-}
-
-function runtimeCliConfigObject(creds) {
-  const config = {};
-  if (creds.baseUrl) config.url = creds.baseUrl;
-  if (creds.apiKey) config.api_key = creds.apiKey;
-  if (creds.account) config.account = creds.account;
-  if (creds.user) config.user = creds.user;
-  if (creds.peerId) config.actor_peer_id = creds.peerId;
-  return config;
-}
-
-function ensureRuntimeCliConfig(creds) {
-  if (creds.credentialSource === "ovcli") {
-    return creds.cliPath || creds.cliPathCandidate || "";
-  }
-
-  const content = JSON.stringify(runtimeCliConfigObject(creds), null, 2) + "\n";
-  const digest = createHash("sha256").update(content).digest("hex").slice(0, 16);
-  const dir = join(homedir(), ".openviking", "codex-plugin-state");
-  const path = join(dir, `runtime-ovcli.${digest}.conf`);
-
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(path, content, { mode: 0o600 });
-  try {
-    chmodSync(path, 0o600);
-  } catch { /* best effort */ }
-  return path;
-}
-
-function printShellEnv() {
-  const creds = resolveOpenVikingCredentials();
-  const cliConfigPath = ensureRuntimeCliConfig(creds);
-  const assignments = {
-    OV_RESOLVED_SOURCE: creds.credentialSource,
-    OV_RESOLVED_URL: creds.baseUrl,
-    OV_RESOLVED_MCP_URL: creds.mcpUrl,
-    OV_RESOLVED_API_KEY: creds.apiKey,
-    OV_RESOLVED_ACCOUNT: creds.account,
-    OV_RESOLVED_USER: creds.user,
-    OV_RESOLVED_PEER_ID: creds.peerId,
-    OV_RESOLVED_CLI_CONFIG_FILE: cliConfigPath,
-    OV_RESOLVED_HAS_API_KEY: creds.hasApiKey ? "1" : "0",
-  };
-  for (const [key, value] of Object.entries(assignments)) {
-    process.stdout.write(`${key}=${shellQuote(value)}\n`);
-  }
-}
-
-export function syncMcpConfig(file, env = process.env) {
-  const creds = resolveOpenVikingCredentials(env);
-  const authMode = resolveAuthMode(creds, env);
-  const j = JSON.parse(readFileSync(file, "utf-8"));
-  const s = j.mcpServers && j.mcpServers["openviking-memory"];
-  if (!s) return false;
-
-  let changed = false;
-  if (creds.mcpUrl && s.url !== creds.mcpUrl) {
-    s.url = creds.mcpUrl;
-    changed = true;
-  }
-
-  const curBearer = s.bearer_token_env_var || "";
-  if (creds.hasApiKey && curBearer !== "OPENVIKING_API_KEY") {
-    s.bearer_token_env_var = "OPENVIKING_API_KEY";
-    changed = true;
-  } else if (!creds.hasApiKey && curBearer) {
-    delete s.bearer_token_env_var;
-    changed = true;
-  }
-
-  const headers = s.env_http_headers || {};
-  const expectedHeaders = {};
-  if (authMode === "trusted" && creds.account) {
-    expectedHeaders["X-OpenViking-Account"] = "OPENVIKING_ACCOUNT";
-  } else if (headers["X-OpenViking-Account"]) {
-    delete headers["X-OpenViking-Account"];
-    changed = true;
-  }
-  if (authMode === "trusted" && creds.user) {
-    expectedHeaders["X-OpenViking-User"] = "OPENVIKING_USER";
-  } else if (headers["X-OpenViking-User"]) {
-    delete headers["X-OpenViking-User"];
-    changed = true;
-  }
-  // Actor-peer is only mapped when a peer is actually configured. Codex's MCP
-  // runtime treats unset env vars in env_http_headers as empty-string headers,
-  // which the OV side then has to disambiguate from "no peer scope". Match
-  // the bearer_token_env_var pattern: present only when there's something to
-  // send. The wrapper.sh strips empty OPENVIKING_PEER_ID before exec'ing
-  // codex, so without this guard the header would silently flip to "".
-  if (creds.peerId) {
-    expectedHeaders["X-OpenViking-Actor-Peer"] = "OPENVIKING_PEER_ID";
-  } else if (headers["X-OpenViking-Actor-Peer"]) {
-    delete headers["X-OpenViking-Actor-Peer"];
-    changed = true;
-  }
-  for (const [header, envName] of Object.entries(expectedHeaders)) {
-    if (headers[header] !== envName) {
-      headers[header] = envName;
-      changed = true;
-    }
-  }
-  if (s.env_http_headers !== headers) {
-    s.env_http_headers = headers;
-    changed = true;
-  }
-
-  if (changed) {
-    writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
-  }
-  return changed;
-}
-
 function main() {
   const cmd = process.argv[2] || "";
-  if (cmd === "shell-env") {
-    printShellEnv();
-    return;
-  }
   if (cmd === "mcp-url") {
     process.stdout.write(resolveOpenVikingCredentials().mcpUrl);
     return;
@@ -322,17 +184,7 @@ function main() {
     process.stdout.write(resolveOpenVikingCredentials().peerId ? "1" : "0");
     return;
   }
-  if (cmd === "sync-mcp") {
-    const file = process.argv[3];
-    if (!file) {
-      process.stderr.write("usage: ov-credentials.mjs sync-mcp <mcp.json>\n");
-      process.exitCode = 2;
-      return;
-    }
-    syncMcpConfig(file);
-    return;
-  }
-  process.stderr.write("usage: ov-credentials.mjs <shell-env|mcp-url|has-api-key|has-peer-id|sync-mcp>\n");
+  process.stderr.write("usage: ov-credentials.mjs <mcp-url|has-api-key|has-peer-id>\n");
   process.exitCode = 2;
 }
 

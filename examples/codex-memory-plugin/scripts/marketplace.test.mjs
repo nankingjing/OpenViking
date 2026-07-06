@@ -5,12 +5,13 @@
  * These checks guard the `codex plugin marketplace add <owner>/OpenViking`
  * install path: the catalog must exist, be valid JSON, point at this plugin,
  * and the plugin's manifest / hooks / mcp wiring must stay consistent with the
- * marketplace-install assumptions (native ${PLUGIN_ROOT}, local-default url,
+ * marketplace-install assumptions (native ${PLUGIN_ROOT}, stdio MCP proxy,
  * no stale tool names).
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -125,15 +126,18 @@ test("hooks.json uses Codex's native ${PLUGIN_ROOT}, not the legacy placeholder"
   }
 });
 
-test(".mcp.json ships a concrete local-default url and omits bearer by default", () => {
+test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {
   const mcp = readJson(join(pluginDir, ".mcp.json"));
   const server = mcp.mcpServers?.[PLUGIN_NAME];
   assert.ok(server, `.mcp.json must define mcpServers["${PLUGIN_NAME}"]`);
-  assert.ok(/^https?:\/\//.test(server.url || ""), `.mcp.json url must be a concrete http(s) endpoint, got "${server.url}"`);
-  assert.ok(!String(server.url).includes("__OPENVIKING_MCP_URL__"), ".mcp.json must not keep the legacy url placeholder");
-  // Codex hard-fails MCP startup if bearer_token_env_var points at an unset var,
-  // so the checked-in (marketplace-default, unauthenticated) file must omit it.
-  assert.ok(!("bearer_token_env_var" in server), "checked-in .mcp.json should omit bearer_token_env_var for the local-default install");
+  assert.equal(server.command, "node");
+  assert.deepEqual(server.args, ["servers/mcp-proxy.mjs"]);
+  assert.equal(server.cwd, ".");
+  assert.equal(server.startup_timeout_sec, 30);
+  assert.ok(!("url" in server), ".mcp.json should not keep streamable-HTTP url wiring");
+  assert.ok(!("bearer_token_env_var" in server), ".mcp.json should not require Codex env-var bearer wiring");
+
+  execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
 });
 
 test("plugin.json keeps the canonical tool list available for reference", () => {

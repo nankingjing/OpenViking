@@ -9,10 +9,9 @@
  *
  * Tuning resolution remains env vars > ov.conf codex.* > built-in defaults.
  *
- * Mirrors the credential fields that Codex's streamable-HTTP MCP entry
- * receives from the shell wrapper. Aligning the resolver prevents identity
- * drift between auto-capture/auto-recall hooks, MCP calls, and child `ov`
- * commands launched from inside Codex.
+ * The stdio MCP proxy calls the same resolver directly. Aligning the resolver
+ * prevents identity drift between auto-capture/auto-recall hooks, MCP calls,
+ * and child `ov` commands launched from inside Codex.
  *
  * File-path env vars:
  *   OPENVIKING_CLI_CONFIG_FILE  alternate ovcli.conf path  (preferred)
