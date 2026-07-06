@@ -239,7 +239,7 @@ async def search_type_quota_recall(
     entries: list[RecallEntry] = []
     fragments_by_type: dict[str, list[str]] = {key: [] for key in TYPE_ORDER}
     budgets = type_char_budgets(max_chars)
-    used_by_type = {key: 0 for key in TYPE_ORDER}
+    used_by_type = dict.fromkeys(TYPE_ORDER, 0)
     total_chars = 0
     preference_full_count = 0
     seen_content: set[int] = set()
@@ -277,7 +277,8 @@ async def search_type_quota_recall(
                 preference_full_count += 1
             if (
                 can_try_full
-                and used_by_type.get(memory_type, 0) + full_chars <= budgets.get(memory_type, max_chars)
+                and used_by_type.get(memory_type, 0) + full_chars
+                <= budgets.get(memory_type, max_chars)
                 and total_chars + full_chars <= max_chars
             ):
                 mode = "full"

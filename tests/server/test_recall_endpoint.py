@@ -1,10 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from types import SimpleNamespace
 
 import httpx
-import pytest
 
 from openviking_cli.retrieve import ContextType, MatchedContext
 
@@ -36,21 +34,25 @@ async def test_recall_endpoint_searches_by_type_quota_and_renders(
         calls.append(kwargs)
         target_uri = kwargs["target_uri"]
         if target_uri.endswith("/events"):
-            return _FakeFindResult([
-                _memory(
-                    "viking://user/test_user/memories/events/launch.md",
-                    0.91,
-                    "Launch decision",
-                )
-            ])
+            return _FakeFindResult(
+                [
+                    _memory(
+                        "viking://user/test_user/memories/events/launch.md",
+                        0.91,
+                        "Launch decision",
+                    )
+                ]
+            )
         if target_uri.endswith("/entities"):
-            return _FakeFindResult([
-                _memory(
-                    "viking://user/test_user/memories/entities/openviking.md",
-                    0.82,
-                    "OpenViking project",
-                )
-            ])
+            return _FakeFindResult(
+                [
+                    _memory(
+                        "viking://user/test_user/memories/entities/openviking.md",
+                        0.82,
+                        "OpenViking project",
+                    )
+                ]
+            )
         return _FakeFindResult([])
 
     async def fake_read(uri, **kwargs):

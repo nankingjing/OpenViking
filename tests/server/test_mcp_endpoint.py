@@ -16,8 +16,8 @@ from fastapi import FastAPI
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
-from openviking.server.dependencies import set_service
 from openviking.server.auth.plugins import DevAuthPlugin
+from openviking.server.dependencies import set_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.mcp_endpoint import (
     StoreMessage,
@@ -32,8 +32,8 @@ from openviking.server.mcp_endpoint import (
     health,
     list_watches,
     read,
-    remember,
     recall,
+    remember,
     search,
 )
 from openviking.server.mcp_endpoint import ls as list_tool
