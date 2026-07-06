@@ -488,13 +488,45 @@ def _run_trigger(
         sys.settrace(old_trace)
 
 
+class _ReadOnlyDict(dict):
+    def _readonly(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("trigger context is read-only")
+
+    __setitem__ = _readonly
+    __delitem__ = _readonly
+    clear = _readonly
+    pop = _readonly
+    popitem = _readonly
+    setdefault = _readonly
+    update = _readonly
+    __ior__ = _readonly
+
+
+class _ReadOnlyList(list):
+    def _readonly(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("trigger context is read-only")
+
+    __setitem__ = _readonly
+    __delitem__ = _readonly
+    append = _readonly
+    clear = _readonly
+    extend = _readonly
+    insert = _readonly
+    pop = _readonly
+    remove = _readonly
+    reverse = _readonly
+    sort = _readonly
+    __iadd__ = _readonly
+    __imul__ = _readonly
+
+
 def _readonly_json(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, dict):
-        return MappingProxyType({str(k): _readonly_json(v) for k, v in value.items()})
+        return _ReadOnlyDict({str(k): _readonly_json(v) for k, v in value.items()})
     if isinstance(value, (list, tuple)):
-        return tuple(_readonly_json(v) for v in value)
+        return _ReadOnlyList([_readonly_json(v) for v in value])
     return str(value)
 
 

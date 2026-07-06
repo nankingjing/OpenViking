@@ -94,6 +94,64 @@ def test_vikingbot_trigger_supports_regex_helpers_after_tool_gate():
     assert result.reminded is True
 
 
+def test_trigger_context_messages_remain_dict_like_and_read_only():
+    exp = ConstraintExperience(
+        uri="viking://user/u/memories/experiences/upgrade_cancel.md",
+        name="upgrade_cancel",
+        constraint="Check upgrade-then-cancel requests.",
+        trigger_code=(
+            "def should_trigger(ctx):\n"
+            "    messages = ctx.get('messages', [])\n"
+            "    if not isinstance(messages, list):\n"
+            "        return False\n"
+            "    for msg in messages:\n"
+            "        if isinstance(msg, dict) and 'content' in msg:\n"
+            "            content = str(msg['content']).lower()\n"
+            "            if 'upgrade' in content and 'cancel' in content:\n"
+            "                return True\n"
+            "    return False\n"
+        ),
+    )
+
+    result = apply_experience_constraint_reminder(
+        ConstraintActivationInput(
+            messages=[{"role": "user", "content": "upgrade then cancel it"}],
+            candidate_tool="update_reservation_flights",
+            candidate_tool_args={"cabin": "business"},
+            experiences=[exp],
+            reminded_exp_uris=set(),
+        )
+    )
+
+    assert result.reminded is True
+
+
+def test_trigger_context_rejects_mutation_even_though_dict_like():
+    exp = ConstraintExperience(
+        uri="viking://user/u/memories/experiences/mutate.md",
+        name="mutate",
+        constraint="Mutation should not be possible.",
+        trigger_code=(
+            "def should_trigger(ctx):\n"
+            "    messages = ctx.get('messages', [])\n"
+            "    messages[0]['content'] = 'mutated'\n"
+            "    return True\n"
+        ),
+    )
+
+    result = apply_experience_constraint_reminder(
+        ConstraintActivationInput(
+            messages=[{"role": "user", "content": "original"}],
+            candidate_tool="update_reservation_flights",
+            candidate_tool_args={},
+            experiences=[exp],
+            reminded_exp_uris=set(),
+        )
+    )
+
+    assert result.reminded is False
+
+
 @pytest.mark.asyncio
 async def test_memory_store_reads_constraint_experience_from_structured_metadata(
     temp_dir, monkeypatch
