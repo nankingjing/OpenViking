@@ -15,11 +15,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
-from openviking.session.memory.constraints.trigger_sandbox import (
-    TriggerSandboxError,
-    smoke_test_trigger_code,
-    validate_trigger_code,
-)
 from openviking.session.train.domain import PolicyPlanItem, PolicySet, RolloutAnalysis, Trajectory
 from openviking.session.train.interfaces import SemanticGradient
 from openviking.telemetry import tracer
@@ -235,7 +230,6 @@ def default_policy_gate_runner() -> GateRunner:
 
     return GateRunner(
         gates=[
-            ExperienceContentFormatGate(mode="enforce"),
             ExperienceCausalSignalGate(mode="enforce"),
             ExperienceToolAlignmentGate(mode="enforce"),
             ExperienceCounterfactualReflectionGate(mode="enforce"),
@@ -257,16 +251,12 @@ Your experience output will be rejected unless every experience satisfies these 
   or partially failed trajectory.
 - Do not output experiences for Outcome=success.
 
-2. Content format
-- Use exactly these headings in this order: ## Failure Pattern, ## Repair Procedure, ## Guardrails.
-- Provide a valid trigger_code in schema metadata. The content body may contain only the three required sections.
-
-3. Tool boundary alignment
+2. Tool boundary alignment
 - trigger_code must bind exactly one candidate_tool.
 - The candidate_tool must match the trajectory's First Wrong Tool Call.Tool or Trigger boundary.
 - Do not choose earlier setup tools, later recovery tools, or multi-tool workflow triggers.
 
-4. Counterfactual reflection
+3. Counterfactual reflection
 - Reflect on whether injecting this experience before the original First Wrong Tool Call would likely improve the source rollout.
 - Reject experiences that would not address the first reward-changing mistake, only summarize a successful workflow, require unavailable information, or likely make the original rollout worse.
 
@@ -287,48 +277,6 @@ def build_gate_retry_instruction(report: GateReport) -> str:
             repair,
         ]
     )
-
-
-@dataclass(slots=True)
-class ExperienceContentFormatGate:
-    mode: GateMode = "enforce"
-    name: str = "experience_content_format"
-
-    def applies_to(self, target: GateTarget) -> bool:
-        return target.memory_type == "experiences" and target.after_content.strip() != ""
-
-    async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        content = target.after_content
-        missing = [
-            heading
-            for heading in ("## Failure Pattern", "## Repair Procedure", "## Guardrails")
-            if heading not in content
-        ]
-        _, trigger_code = _experience_constraint_and_trigger(content, target)
-        reasons: list[str] = []
-        if missing:
-            reasons.append("missing required headings: " + ", ".join(missing))
-        if not trigger_code:
-            reasons.append("missing trigger_code")
-        if trigger_code:
-            try:
-                validate_trigger_code(trigger_code)
-                smoke_test_trigger_code(trigger_code)
-            except TriggerSandboxError as exc:
-                reasons.append(f"invalid trigger_code: {exc}")
-        if not reasons:
-            return None
-        return GateDecision(
-            gate_name=self.name,
-            action="reject",
-            reason="; ".join(reasons),
-            evidence={"target_name": target.target_name},
-            retriable=True,
-            repair_prompt=(
-                "Rewrite the experience content with exactly the required headings and provide "
-                "valid trigger_code in schema metadata."
-            ),
-        )
 
 
 @dataclass(slots=True)

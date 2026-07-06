@@ -10,6 +10,7 @@ enabled: true
 operation_mode: "upsert"
 agent_only: true
 content_template: |
+  # Constraint
   {{ constraint|default(content, true) }}
 
   # Experience Trigger

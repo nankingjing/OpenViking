@@ -158,10 +158,13 @@ def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate(
     names = [gate.name for gate in default_policy_gate_runner().gates]
 
     assert "experience_counterfactual_reflection" in names
+    assert "experience_content_format" not in names
     assert "experience_trigger_shape" not in names
     assert "experience_update_narrowing" not in names
 
     contract = default_experience_gate_contract()
+    assert "Content format" not in contract
+    assert "Use exactly these headings" not in contract
     assert "Counterfactual reflection" in contract
     assert "eligible for experience learning by default" in contract
     assert "Action=skip or Trigger boundary=none must not suppress" in contract
