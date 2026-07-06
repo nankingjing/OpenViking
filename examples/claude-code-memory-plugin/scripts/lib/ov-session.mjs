@@ -126,10 +126,10 @@ export async function addMessage(fetchJSON, sessionId, payload) {
  * Commit the persistent OV session (archive + background extract). Safe to
  * call repeatedly: if there are no pending messages the server is a no-op.
  */
-export async function commitSession(fetchJSON, sessionId) {
+export async function commitSession(fetchJSON, sessionId, payload = {}) {
   const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify(payload || {}),
   });
   if (!res.ok) {
     if (isRetryableFailure(res)) {

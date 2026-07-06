@@ -5,7 +5,7 @@ Long-term semantic memory for [Codex](https://developers.openai.com/codex), powe
 This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-memory-plugin). It hooks Codex's lifecycle to:
 
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
-- **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. No commit per turn.
+- **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. When `pending_tokens` reaches `OPENVIKING_COMMIT_TOKEN_THRESHOLD`, commit while keeping a recent live tail.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` never commits or sweeps; if the live OV session was already committed, it may inject the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
 
@@ -141,7 +141,7 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
  │ session-start │ │ auto-     │ │ auto-       │ │ pre-compact-    │
  │ -commit.mjs   │ │ recall.mjs│ │ capture.mjs │ │ capture.mjs     │
  │ (active-win   │ │ (search + │ │ (append +   │ │ (commit + reset │
- │ heuristic +   │ │ compress) │ │ no commit)  │ │ ovSessionId)    │
+ │ heuristic +   │ │ compress) │ │ threshold   │ │ ovSessionId)    │
  │ idle TTL +    │ │           │ │             │ │                 │
  │ resume inject)│ │           │ │             │ │                 │
  └────┬──────────┘ └────┬──────┘ └──────┬──────┘ └──────────┬──────┘
@@ -212,9 +212,11 @@ Config knobs:
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | Per-candidate startup probe timeout. |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` | Cache TTL used by `UserPromptSubmit` when reading the latest profile. |
 
-### Stop (turn end → `add_message`, NOT `commit`)
+### Stop (turn end → `add_message`, threshold commit)
 
-`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. No `/commit` per turn — that would over-fragment memory extraction. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append; tool calls/results are retained as compact `[tool-call ...]` / `[tool-result ...]` lines capped by `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default 2000).
+`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append; tool calls/results are retained as compact `[tool-call ...]` / `[tool-result ...]` lines capped by `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default 2000).
+
+After a successful append, Stop reads the session meta and commits when `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default `20000`). Threshold commits pass `keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default `10`) so the newest turns remain live for continuity while older context is archived and extracted. `PreCompact` still commits everything before compaction.
 
 ### PreCompact (deterministic commit)
 
@@ -261,7 +263,7 @@ codex-memory-plugin/
 │   ├── recall-compressor-profile.mjs # Compressor profile detection/cache
 │   ├── session-state.mjs        # Per-codex-session OV session state
 │   ├── auto-recall.mjs          # UserPromptSubmit hook (REST /search/search)
-│   ├── auto-capture.mjs         # Stop hook (REST /sessions/{id}/messages)
+│   ├── auto-capture.mjs         # Stop hook (append + threshold commit)
 │   ├── session-start-commit.mjs # SessionStart hook (active-window + idle TTL)
 │   └── pre-compact-capture.mjs  # PreCompact hook
 ├── servers/

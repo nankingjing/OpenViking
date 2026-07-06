@@ -255,6 +255,10 @@ export function loadConfig() {
       process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD,
       num(cc.commitTokenThreshold, 20000),
     ))),
+    commitKeepRecentCount: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_COMMIT_KEEP_RECENT_COUNT,
+      num(cc.commitKeepRecentCount, 10),
+    ))),
 
     // P0-3b: token budget for session-start archive-overview fetch
     resumeContextBudget: Math.max(1024, Math.floor(num(

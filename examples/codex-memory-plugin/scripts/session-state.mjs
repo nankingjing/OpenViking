@@ -25,7 +25,9 @@ function safeId(codexSessionId) {
   return String(codexSessionId).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-export { deriveCodexSessionId as deriveOvSessionId };
+export function deriveOvSessionId(codexSessionId) {
+  return deriveCodexSessionId(codexSessionId);
+}
 
 export function resolveOvSessionId(state) {
   // Always derive the deterministic cx-* id. Legacy persisted UUIDs from
