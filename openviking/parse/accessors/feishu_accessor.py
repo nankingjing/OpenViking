@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlparse
 
-from openviking.utils.feishu_errors import build_feishu_error_details, raise_from_lark_response
+from openviking.utils.feishu_errors import raise_from_lark_response
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -401,7 +401,6 @@ class FeishuAccessor(DataAccessor):
                 response,
                 operation=f"resolve wiki node {token}",
                 resource=token,
-                using_user_token=bool(feishu_access_token),
             )
         node = response.data.node
         obj_type = node.obj_type or ""
@@ -500,7 +499,6 @@ class FeishuAccessor(DataAccessor):
                     response,
                     operation=f"fetch blocks for {document_id}",
                     resource=document_id,
-                    using_user_token=bool(feishu_access_token),
                 )
 
             items = response.data.items or []

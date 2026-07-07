@@ -189,8 +189,6 @@ export function shouldRedirectToLoginOnApiError(
   }
 
   const clientError = error as { code?: string; statusCode?: number }
-  // Session/auth failures use 401. HTTP 403 is reused for business
-  // PERMISSION_DENIED (Feishu document access, resource ACL, role checks).
   return (
     clientError.statusCode === 401 || clientError.code === 'UNAUTHENTICATED'
   )
