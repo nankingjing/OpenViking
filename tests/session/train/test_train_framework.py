@@ -2046,3 +2046,86 @@ async def test_session_commit_policy_trainer_filters_legacy_embedded_evaluation_
     )
     assert "evaluation report:" not in visible_text
     assert visible_text.count("# OpenViking OutcomeEvaluation") == 1
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_adds_tau2_evaluation_semantics():
+    from openviking.message import ToolPart
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[
+            Message(id="m1", role="user", parts=[TextPart(text="cancel reservation")]),
+            Message(
+                id="tool-1",
+                role="user",
+                parts=[
+                    ToolPart(
+                        tool_name="update_reservation_flights",
+                        tool_input={"reservation_id": "XEHM4B", "cabin": "business"},
+                        tool_output="{}",
+                        tool_status="completed",
+                    )
+                ],
+            ),
+        ],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(
+            passed=False,
+            score=0.0,
+            criterion_results=[],
+            feedback=[],
+            metadata={
+                "evaluation_result": {
+                    "reward": 0.0,
+                    "reward_basis": ["DB", "COMMUNICATE"],
+                    "reward_breakdown": {"DB": 1.0, "COMMUNICATE": 0.0},
+                    "db_check": {"db_match": True, "db_reward": 1.0},
+                    "action_checks": [
+                        {
+                            "action": {
+                                "name": "update_reservation_flights",
+                                "arguments": {
+                                    "reservation_id": "XEHM4B",
+                                    "cabin": "business",
+                                },
+                            },
+                            "action_match": True,
+                            "tool_type": "write",
+                        }
+                    ],
+                    "communicate_checks": [
+                        {
+                            "info": "1628",
+                            "met": False,
+                            "justification": "Information '1628' not communicated.",
+                        }
+                    ],
+                }
+            },
+        ),
+        metadata={"data_split": "unit", "task_no": 7},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    committed_messages = client.messages[commit_result["session_id"]]
+    last_text = committed_messages[-1]["parts"][0]["text"]
+    assert "# OpenViking OutcomeEvaluation" in last_text
+    assert "## Tau2 Evaluation Semantics" in last_text
+    assert "action_checks[].action_match=true" in last_text
+    assert "Treat it as correct and required" in last_text
+    assert "## Derived Evaluation Verdict" in last_text
+    assert "Required actions matched (preservation set; do not block these):" in last_text
+    assert "update_reservation_flights" in last_text
+    assert "action_match=true | tool_type=write" in last_text
+    assert "first repair boundary should be communicate_with_user / final response" in last_text
+    assert "Do not learn any experience that blocks or discourages" in last_text
