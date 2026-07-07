@@ -92,9 +92,17 @@ Before outputting any experience, decide which case applies:
 - Existing experience is correct but the agent ignored it → skip unless wording/trigger is clearly too weak to be usable.
 - Existing experience is misleading, over-broad, or caused the bad path → update it to narrow the trigger and repair wording.
 - No relevant experience exists and the failure has a reusable pre-tool repair → create a new experience.
-- The failure is case-specific, random, already solved by tool facts, or not preventable by a pre-tool reminder → skip.
-- For failed or partially failed trajectories, inspect the failure independently; do not treat a trajectory
+- The failure is case-specific with no reusable semantic role, random, already solved by tool facts, or not preventable by a pre-tool reminder → skip.
+- If tool/action/DB checks passed but a required user-visible communication failed, treat the final
+  `communicate_with_user`/final-response content as a valid pre-tool boundary. Do not skip merely
+  because the literal missing value is case-specific; generalize it to the missing semantic role
+  (for example required total cost, required identifier, required policy explanation, or next step).
+- For failed or partially failed trajectories, inspect the failure independently; do not treat a legacy
   `Experience Repair Signal.Action=skip` as a reason to skip when a reusable repair can be created or updated.
+- In the split `Experience Repair Signal` format, `Existing target experience: none` only means
+  no existing loaded memory should be modified; it does NOT mean no new experience should be created.
+  If `New experience action=create` or `Recommended operation=create`, create a new experience unless
+  the repair is not reusable/preventable or is already covered correctly.
 
 ## Rules
 

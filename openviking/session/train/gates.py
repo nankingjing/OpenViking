@@ -246,9 +246,13 @@ Your experience output will be rejected unless every experience satisfies these 
 1. Causal eligibility
 - Non-success trajectories are eligible for experience learning by default,
   including creating new experiences.
-- Treat Experience Repair Signal.Action as advisory context, not as an authorization gate:
-  Action=skip or Trigger boundary=none must not suppress a reusable repair for a failed
-  or partially failed trajectory.
+- Treat Experience Repair Signal as advisory context, not as an authorization gate:
+  legacy Action=skip, Recommended operation=skip, Existing target experience=none,
+  or Trigger boundary=none must not suppress a reusable repair for a failed or
+  partially failed trajectory.
+- Existing target experience=none only means no existing loaded memory should be modified;
+  it must not suppress creating a brand-new experience when New experience action=create
+  or when the first reward-changing mistake is reusable and preventable.
 - Do not output experiences for Outcome=success.
 
 2. Tool boundary alignment
@@ -1005,7 +1009,7 @@ def parse_trajectory_repair_signal(trajectory: Trajectory) -> TrajectoryRepairSi
     return TrajectoryRepairSignal(
         uri=trajectory.uri,
         outcome=_norm_token(outcome),
-        repair_action=_norm_token(_field_from_section(repair_section, "Action")),
+        repair_action=_repair_action_from_section(repair_section),
         first_wrong_tool=_norm_tool(first_tool),
         trigger_boundary=_norm_tool(_field_from_section(repair_section, "Trigger boundary")),
         first_wrong_step=_field_from_section(first_section, "Step"),
@@ -1014,6 +1018,22 @@ def parse_trajectory_repair_signal(trajectory: Trajectory) -> TrajectoryRepairSi
         action_checks_passed=_bool_from_runtime(runtime_section, "action"),
         communicate_checks_passed=_bool_from_runtime(runtime_section, "communicate"),
     )
+
+
+def _repair_action_from_section(repair_section: str) -> str:
+    recommended = _norm_token(_field_from_section(repair_section, "Recommended operation"))
+    if recommended:
+        return recommended
+    legacy = _norm_token(_field_from_section(repair_section, "Action"))
+    if legacy:
+        return legacy
+    existing_action = _norm_token(_field_from_section(repair_section, "Existing experience action"))
+    if existing_action == "update":
+        return existing_action
+    new_action = _norm_token(_field_from_section(repair_section, "New experience action"))
+    if new_action == "create":
+        return new_action
+    return new_action or existing_action
 
 
 def _signal_allows_experience_update(signal: TrajectoryRepairSignal) -> bool:

@@ -167,7 +167,8 @@ def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate(
     assert "Use exactly these headings" not in contract
     assert "Counterfactual reflection" in contract
     assert "eligible for experience learning by default" in contract
-    assert "Action=skip or Trigger boundary=none must not suppress" in contract
+    assert "Recommended operation=skip" in contract
+    assert "Existing target experience=none only means" in contract
     assert "Action is create/update" not in contract
     assert "Candidate-shape trigger" not in contract
     assert "Update safety" not in contract
@@ -213,6 +214,46 @@ async def test_tool_alignment_uses_first_wrong_tool_even_when_trigger_boundary_n
     decision = await ExperienceToolAlignmentGate().evaluate(target)
 
     assert decision is None
+
+
+@pytest.mark.asyncio
+async def test_causal_signal_gate_allows_split_signal_with_no_existing_target_for_new_experience():
+    trajectory = Trajectory(
+        name="missing_total",
+        uri="viking://user/u/memories/trajectories/missing_total.md",
+        outcome="failure",
+        retrieval_anchor="Stage: final_response",
+        content=(
+            "# Missing total\n"
+            "- Outcome: failure\n"
+            "- First Wrong Tool Call:\n"
+            "  - Tool: communicate_with_user\n"
+            "  - Error type: missing_communication\n"
+            "- Experience Repair Signal:\n"
+            "  - Recommended operation: create\n"
+            "  - Existing experience action: none\n"
+            "  - Existing target experience: none\n"
+            "  - New experience action: create\n"
+            "  - New experience candidate: missing_required_total\n"
+            "  - Trigger boundary: communicate_with_user\n"
+        ),
+    )
+    item = _plan_item()
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=trajectory,
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    causal_decision = await ExperienceCausalSignalGate().evaluate(target)
+    alignment_decision = await ExperienceToolAlignmentGate().evaluate(target)
+
+    assert causal_decision is None
+    assert alignment_decision is None
 
 
 @pytest.mark.asyncio
