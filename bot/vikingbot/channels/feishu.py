@@ -806,6 +806,82 @@ class FeishuChannel(BaseChannel):
             logger.debug(f"Stack trace: {traceback.format_exc()}")
             return None
 
+    async def _download_and_save_file(
+        self, file_key: str, message_id: str, file_name: str | None = None
+    ) -> str | None:
+        """Download a Feishu message file resource and save into the shared workspace."""
+        try:
+            logger.info(
+                f"Downloading Feishu file, file_key={file_key}, "
+                f"message_id={message_id}, file_name={file_name}"
+            )
+            if not self._client:
+                logger.warning("Feishu client not initialized when downloading file")
+                return None
+
+            request: GetMessageResourceRequest = (
+                GetMessageResourceRequest.builder()
+                .message_id(message_id)
+                .file_key(file_key)
+                .type("file")
+                .build()
+            )
+            response = await self._client.im.v1.message_resource.aget(request)
+
+            if not response.success():
+                raw_detail = getattr(getattr(response, "raw", None), "content", response.msg)
+                logger.warning(
+                    f"Failed to download file: code={response.code}, msg={raw_detail}, "
+                    f"log_id={response.get_log_id()}"
+                )
+                return None
+
+            file_bytes = response.file.read()
+            if not file_bytes:
+                logger.warning(f"Empty file content for file_key={file_key}")
+                return None
+
+            from pathlib import Path
+
+            # 落到 bot 的 workspace 目录（config.workspace_path，等于 {bot_data}/workspace），
+            # agent tools 也在这里工作；未注入时兜底到 bot_data/received。
+            if self.workspace_path:
+                target_dir = Path(self.workspace_path) / "received"
+            else:
+                target_dir = get_data_path() / "received"
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            safe_name: str | None = None
+            if file_name:
+                candidate = Path(file_name).name
+                candidate = re.sub(r"[^\w.\-]+", "_", candidate).strip("._")
+                if candidate:
+                    safe_name = candidate
+
+            if not safe_name:
+                import uuid
+
+                safe_name = f"feishu_{uuid.uuid4().hex[:16]}.bin"
+
+            file_path = target_dir / safe_name
+            if file_path.exists():
+                # 同名冲突时保留原名可识别度，用短后缀避免覆盖历史文件。
+                import uuid
+
+                stem = file_path.stem
+                suffix = file_path.suffix
+                file_path = target_dir / f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
+
+            file_path.write_bytes(file_bytes)
+            logger.info(f"Feishu file saved to: {file_path}")
+            return str(file_path)
+        except Exception as e:
+            logger.warning(f"Failed to download Feishu file {file_key}: {e}")
+            import traceback
+
+            logger.debug(f"Stack trace: {traceback.format_exc()}")
+            return None
+
     async def _parse_message_content(
         self, message: Any, msg_type: str, message_id: str
     ) -> tuple[str, list[str]]:
@@ -861,6 +937,35 @@ class FeishuChannel(BaseChannel):
                 logger.warning(f"Failed to process {msg_type} message: {e}")
         elif msg_type == "interactive":
             content = message.content
+        elif msg_type == "file":
+            file_name = ""
+            file_key = ""
+            try:
+                msg_content = json.loads(message.content)
+                file_key = msg_content.get("file_key", "") or ""
+                file_name = msg_content.get("file_name", "") or ""
+            except Exception as e:
+                logger.warning(f"Failed to parse file message content: {e}")
+
+            display_name = file_name or "file"
+
+            if file_key:
+                saved_path = await self._download_and_save_file(
+                    file_key, message_id, file_name or None
+                )
+                if saved_path:
+                    media = [saved_path]
+                    # 明确告知 agent 文件真实落盘位置，避免它在别的目录里空搜。
+                    content = f"[file:{display_name}] saved to {saved_path}"
+                else:
+                    logger.warning(
+                        f"Feishu file download failed, message_id={message_id}, "
+                        f"file_key={file_key}, file_name={file_name}"
+                    )
+                    content = f"[file:{display_name}] (download failed)"
+            else:
+                logger.warning(f"File message missing file_key, message_id={message_id}")
+                content = f"[file:{display_name}]"
         else:
             content = MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
 
