@@ -563,7 +563,7 @@ async def test_find_combines_tags_with_existing_filter(
         json={
             "query": "sample",
             "filter": {"op": "must", "field": "kind", "conds": ["email"]},
-            "tags": ["Env=Prod", " env=prod "],
+            "tags": ["Env=Prod", " env=prod ", "team=Search"],
         },
     )
 
@@ -574,6 +574,7 @@ async def test_find_combines_tags_with_existing_filter(
         "conds": [
             {"op": "must", "field": "kind", "conds": ["email"]},
             {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
         ],
     }
 
@@ -620,15 +621,17 @@ async def test_search_compiles_tags_only_filter(client: httpx.AsyncClient, servi
 
     resp = await client.post(
         "/api/v1/search/search",
-        json={"query": "sample", "tags": ["Team=Search"]},
+        json={"query": "sample", "tags": ["Team=Search", "env=prod"]},
     )
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
     assert captured["filter"] == {
-        "op": "must",
-        "field": "search_tags",
-        "conds": ["team=search"],
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
     }
 
 

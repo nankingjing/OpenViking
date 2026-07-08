@@ -57,6 +57,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | query | str | 是 | - | 搜索查询字符串 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
+| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -144,6 +145,20 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     }'
 ```
 
+**按显式检索标签搜索**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "rollback runbook",
+        "tags": ["env=prod", "team=search"]
+    }'
+```
+
+Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` 会要求全部命中；上面的例子只返回显式检索标签同时包含 `env=prod` 和 `team=search` 的上下文。
+
 **Python SDK**
 
 ```python
@@ -168,6 +183,12 @@ recent_emails = client.find(
 typed_results = client.find(
     "authentication",
     context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+)
+
+# 按显式检索标签搜索。多个 tags 之间是 AND 关系。
+tagged_results = client.find(
+    "rollback runbook",
+    tags=["env=prod", "team=search"],
 )
 
 # 遍历结果
@@ -333,6 +354,7 @@ openviking find "how to authenticate users" -L 1,2
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
+| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -344,7 +366,7 @@ openviking find "how to authenticate users" -L 1,2
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-`search()` 使用和 `find()` 相同的目标解析规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。
+`search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。
 
 #### 3. 使用示例
 

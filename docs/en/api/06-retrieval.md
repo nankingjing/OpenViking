@@ -57,6 +57,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 | query | str | Yes | - | Search query string |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
+| tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -143,6 +144,20 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     }'
 ```
 
+**Search by Explicit Retrieval Tags**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "rollback runbook",
+        "tags": ["env=prod", "team=search"]
+    }'
+```
+
+Tags must use strict `k=v` strings. When multiple tags are provided, `find()` requires all of them; the example above only returns contexts whose explicit retrieval tags contain both `env=prod` and `team=search`.
+
 **Python SDK**
 
 ```python
@@ -167,6 +182,12 @@ recent_emails = client.find(
 typed_results = client.find(
     "authentication",
     context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+)
+
+# Search by explicit retrieval tags. Multiple tags are AND-ed.
+tagged_results = client.find(
+    "rollback runbook",
+    tags=["env=prod", "team=search"],
 )
 
 # Iterate through results
@@ -332,6 +353,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
+| tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -342,7 +364,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-`search()` uses the same target resolution rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`.
+`search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`.
 
 #### 3. Usage Examples
 

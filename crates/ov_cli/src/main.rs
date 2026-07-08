@@ -630,7 +630,7 @@ enum Commands {
             help_heading = "Common options"
         )]
         context_type: Option<Vec<String>>,
-        /// Only include results matching any of these explicit tags
+        /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
     },
@@ -691,7 +691,7 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         context_type: Option<Vec<String>>,
-        /// Only include results matching any of these explicit tags
+        /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
     },
