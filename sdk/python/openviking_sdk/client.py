@@ -1214,10 +1214,11 @@ class AsyncHTTPClient:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         response = await self._http.post(
             "/api/v1/content/reindex",
-            json={"uri": uri, "mode": mode, "wait": wait},
+            json={"uri": uri, "mode": mode, "wait": wait, "dry_run": dry_run},
         )
         return self._handle_response(response)
 
@@ -2030,8 +2031,9 @@ class SyncHTTPClient:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait))
+        return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait, dry_run=dry_run))
 
     def admin_create_account(
         self,

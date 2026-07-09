@@ -31,6 +31,7 @@ from openviking_cli.exceptions import (
     UnimplementedError,
     VLMFailedError,
 )
+from openviking_cli.utils import run_async
 
 ERROR_CODE_TO_EXCEPTION = {
     "INVALID_ARGUMENT": InvalidArgumentError,
@@ -102,8 +103,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
                     name
                     for name, param in sig.parameters.items()
                     if name != "self"
-                    and param.kind
-                    in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+                    and param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
                 ]
                 timeout_index = params.index("timeout")
             except Exception:
@@ -146,8 +146,30 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         _raise_legacy_exception(error)
 
+    async def reindex(
+        self,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        response = await self._http.post(
+            "/api/v1/content/reindex",
+            json={"uri": uri, "mode": mode, "wait": wait, "dry_run": dry_run},
+        )
+        return self._handle_response(response)
+
 
 class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._async_client = AsyncHTTPClient(*args, **kwargs)
+
+    def reindex(
+        self,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait, dry_run=dry_run))
