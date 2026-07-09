@@ -8,6 +8,7 @@ Routing is controlled by ov.conf (OpenVikingConfig.parser_api).
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Union
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from openviking.parse.accessors.base import LocalResource
@@ -18,6 +19,11 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+def extract_extension(source: Union[str, Path]) -> str:
+    s = str(source)
+    if s.startswith(("http://", "https://")):
+        s = urlparse(s).path
+    return Path(s).suffix.lower().lstrip(".")
 
 class ParserRouter:
     """
@@ -48,7 +54,7 @@ class ParserRouter:
         if not parser_api or not getattr(parser_api, "enable", False):
             return False
 
-        ext = Path(source_path).suffix.lower().lstrip(".")
+        ext = extract_extension(source_path)
         extensions = getattr(parser_api, "extensions", None) or []
         return ext in extensions
 
