@@ -22,11 +22,17 @@ class MessageBus:
         self._outbound_subscribers: dict[
             str, list[Callable[[OutboundMessage], Awaitable[None]]]
         ] = {}
+        self._inbound_subscribers: list[Callable[[InboundMessage], Awaitable[None]]] = []
         self._running = False
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
         # print(f'publish_inbound={msg}')
+        for callback in self._inbound_subscribers:
+            try:
+                await callback(msg)
+            except Exception as e:
+                logger.exception(f"Error dispatching inbound subscriber: {e}")
         await self.inbound.put(msg)
 
     async def consume_inbound(self) -> InboundMessage:
@@ -49,6 +55,10 @@ class MessageBus:
         if channel_key not in self._outbound_subscribers:
             self._outbound_subscribers[channel_key] = []
         self._outbound_subscribers[channel_key].append(callback)
+
+    def subscribe_inbound(self, callback: Callable[[InboundMessage], Awaitable[None]]) -> None:
+        """Subscribe to inbound messages without consuming them."""
+        self._inbound_subscribers.append(callback)
 
     async def dispatch_outbound(self) -> None:
         """

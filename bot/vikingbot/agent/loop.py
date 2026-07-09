@@ -667,6 +667,8 @@ class AgentLoop:
             try:
                 # Wait for next message
                 msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
+                if msg.metadata.get("handled_by_weekly_report"):
+                    continue
 
                 # Process it
                 try:

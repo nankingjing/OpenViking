@@ -412,7 +412,7 @@ def gateway(
         version="1.0.0",
     )
 
-    cron = prepare_cron(bus)
+    cron = prepare_cron(bus, config=config)
     channels = prepare_channel(
         config,
         bus,
@@ -508,17 +508,58 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
     return agent
 
 
-def prepare_cron(bus, quiet: bool = False) -> CronService:
+def prepare_cron(bus, config=None, quiet: bool = False) -> CronService:
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
-
     # Use a mutable holder for the agent reference
     agent_holder = {"agent": None}
+    weekly_report = None
+    if config is not None:
+        from vikingbot.weekly_report import WeeklyReportService
+
+        async def classify_weekly_report_text(content: str) -> bool | None:
+            agent = agent_holder["agent"]
+            if agent is None:
+                return None
+            response = await agent.provider.chat(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Classify whether the user message is an actual weekly report "
+                            "submission. Reply exactly REPORT or CHAT. REPORT means it "
+                            "contains concrete weekly work content. CHAT means casual chat, "
+                            "acknowledgement, promise to send later, or a question."
+                        ),
+                    },
+                    {"role": "user", "content": content},
+                ],
+                model=agent.model,
+                max_tokens=4,
+                temperature=0,
+                session_id="weekly-report-classifier",
+            )
+            verdict = (response.content or "").strip().upper()
+            if verdict.startswith("REPORT"):
+                return True
+            if verdict.startswith("CHAT"):
+                return False
+            return None
+
+        weekly_report = WeeklyReportService(
+            config, bus, classify_text=classify_weekly_report_text
+        )
+        if weekly_report.enabled:
+            weekly_report.configure_cron(cron)
+            bus.subscribe_inbound(weekly_report.handle_inbound)
 
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
+        if weekly_report and await weekly_report.handle_cron(job):
+            return None
+
         session_key = SessionKey(**json.loads(job.payload.session_key_str))
         message = job.payload.message
         channel_metadata = dict(job.payload.channel_metadata or {})
@@ -796,7 +837,7 @@ def chat(
     # Use unified default session ID
     if session_id is None:
         session_id = get_or_create_machine_id()
-    cron = prepare_cron(bus, quiet=is_single_turn)
+    cron = prepare_cron(bus, config=config, quiet=is_single_turn)
     channels = prepare_agent_channel(
         config,
         bus,

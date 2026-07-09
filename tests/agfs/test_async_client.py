@@ -18,6 +18,15 @@ class _SyncAGFS:
         return ("rm", path, kwargs)
 
 
+class _TreeOnlyAGFS:
+    def tree_directory(self, path, **kwargs):
+        return [
+            {"path": f"{path}/a.md", "name": "a.md", "is_dir": False},
+            {"path": f"{path}/notes/b.txt", "name": "b.txt", "is_dir": False},
+            {"path": f"{path}/notes/c.md", "name": "c.md", "is_dir": False},
+        ]
+
+
 @pytest.mark.asyncio
 async def test_async_agfs_client_hides_threadpool(monkeypatch):
     to_thread_calls = []
@@ -58,3 +67,19 @@ async def test_async_agfs_client_hides_threadpool(monkeypatch):
             {"recursive": True, "ctx": {"account_id": "_system"}},
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_glob_directory_falls_back_to_tree_directory_when_binding_lacks_glob():
+    agfs = AsyncAGFSClient(_TreeOnlyAGFS())
+
+    result = await agfs.glob_directory("/local/acct/resources", "**/*.md", page_size=1)
+
+    assert [entry["name"] for entry in result["entries"]] == ["a.md"]
+    assert result["next_token"] == "1"
+
+    next_result = await agfs.glob_directory(
+        "/local/acct/resources", "**/*.md", page_size=1, continuation_token="1"
+    )
+    assert [entry["name"] for entry in next_result["entries"]] == ["c.md"]
+    assert next_result["next_token"] is None

@@ -512,6 +512,30 @@ class HeartbeatConfig(BaseModel):
     interval_seconds: int = 10 * 60  # Default: 5 minutes
 
 
+class WeeklyReportMemberConfig(BaseModel):
+    """One weekly-report assignee."""
+
+    sender_id: str = ""
+    name: str = ""
+    chat_id: str = ""
+    channel_type: str = "feishu"
+    channel_id: str = ""
+
+
+class WeeklyReportConfig(BaseModel):
+    """Weekly report collection configuration."""
+
+    enabled: bool = False
+    members: list[WeeklyReportMemberConfig] = Field(default_factory=list)
+    prompt_cron: str = "0 17 * * 5"
+    reminder_cron: str = "0 11 * * *"
+    reminder_every_seconds: int = 0
+    timezone: str = "Asia/Shanghai"
+    target_uri: str = "viking://resources/weekly-reports"
+    prompt_message: str = "请提交本周周报，直接回复这条消息即可。"
+    reminder_message: str = "还没收到你的本周周报，请今天补交一下，直接回复这条消息即可。"
+
+
 LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -773,6 +797,7 @@ class Config(BaseSettings):
     ov_server: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    weekly_report: WeeklyReportConfig = Field(default_factory=WeeklyReportConfig)
     langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)
     hooks: list[str] = Field(["vikingbot.hooks.builtins.openviking_hooks.hooks"])
     skills: list[str] = Field(

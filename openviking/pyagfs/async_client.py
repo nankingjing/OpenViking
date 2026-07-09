@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 from collections.abc import Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
@@ -235,6 +236,28 @@ class AsyncAGFSClient:
         *,
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
+        if not hasattr(self._client, "glob_directory"):
+            entries = await self.tree_directory(
+                path,
+                show_hidden=show_hidden,
+                node_limit=None,
+                level_limit=level_limit,
+                fs_ctx=fs_ctx,
+            )
+            start = int(continuation_token or 0)
+            matched = []
+            for entry in entries:
+                entry_path = entry.get("path", "")
+                rel_path = entry.get("rel_path") or entry_path.removeprefix(path.rstrip("/") + "/")
+                if fnmatch.fnmatchcase(rel_path, pattern) or (
+                    pattern.startswith("**/") and fnmatch.fnmatchcase(rel_path, pattern[3:])
+                ):
+                    matched.append(entry)
+            end = start + page_size if page_size else None
+            return {
+                "entries": matched[start:end],
+                "next_token": str(end) if end is not None and end < len(matched) else None,
+            }
         return await self.run(
             "glob_directory",
             path,
