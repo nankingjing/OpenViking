@@ -275,7 +275,9 @@ def test_ov_server_api_key_mode_ignores_bot_root_key_and_uses_ovcli_user_key(mon
         lambda: SimpleNamespace(api_key="stale-ovcli-key"),
     )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(
+        bot_data, ov_data, server_section_present=True
+    )
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "stale-ovcli-key"
@@ -291,7 +293,9 @@ def test_ov_server_trusted_mode_fills_api_key_from_top_level_root_key(monkeypatc
         lambda: SimpleNamespace(api_key="stale-ovcli-key"),
     )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(
+        bot_data, ov_data, server_section_present=True
+    )
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "server-root-key"
@@ -308,7 +312,9 @@ def test_ov_server_current_trusted_prefers_top_level_root_key(monkeypatch):
         lambda: SimpleNamespace(api_key="stale-ovcli-key"),
     )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(
+        bot_data, ov_data, server_section_present=True
+    )
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "server-root-key"
@@ -324,7 +330,9 @@ def test_ov_server_external_url_does_not_inherit_trusted_root_key(monkeypatch):
         lambda: SimpleNamespace(api_key="external-user-key"),
     )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(
+        bot_data, ov_data, server_section_present=True
+    )
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "external-user-key"
@@ -341,7 +349,9 @@ def test_ov_server_explicit_url_is_external_even_if_it_matches_local_url(monkeyp
         lambda: SimpleNamespace(api_key="stale-ovcli-key"),
     )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(
+        bot_data, ov_data, server_section_present=True
+    )
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "stale-ovcli-key"
@@ -357,7 +367,9 @@ def test_ov_server_external_url_forces_remote_mode():
     }
     ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(
+        bot_data, ov_data, server_section_present=True
+    )
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "external-user-key"
@@ -377,7 +389,9 @@ def test_ov_server_external_url_root_key_does_not_imply_root_mode(monkeypatch):
         lambda: SimpleNamespace(api_key="external-user-key"),
     )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(
+        bot_data, ov_data, server_section_present=True
+    )
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "external-user-key"
@@ -394,7 +408,9 @@ def test_ov_server_legacy_mode_is_ignored_for_current_api_key_server(monkeypatch
         lambda: SimpleNamespace(api_key="ovcli-user-key"),
     )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(
+        bot_data, ov_data, server_section_present=True
+    )
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "ovcli-user-key"
@@ -409,10 +425,29 @@ def test_ov_server_current_dev_mode_ignores_legacy_api_key_for_mode(monkeypatch)
         lambda: SimpleNamespace(api_key="stale-ovcli-key"),
     )
 
-    config_loader_module._merge_ov_server_config(bot_data, {})
+    config_loader_module._merge_ov_server_config(
+        bot_data, {}, server_section_present=True
+    )
 
     assert bot_data["mode"] == "local"
     assert bot_data["api_key"] == "bot-user-key"
+
+
+def test_ov_server_without_root_server_section_stays_standalone():
+    bot_data = {}
+
+    auth_mode, source = config_loader_module._merge_ov_server_config(
+        bot_data,
+        {},
+        server_section_present=False,
+    )
+
+    assert auth_mode == ""
+    assert source == "none"
+    assert "source" not in bot_data
+    assert bot_data["server_url"] == ""
+    assert bot_data["mode"] == "local"
+    assert bot_data["api_key_type"] == "user"
 
 
 def _auth_probe(*, ok=True, status_code=200, data=None, error=""):
@@ -427,6 +462,7 @@ def _auth_probe(*, ok=True, status_code=200, data=None, error=""):
 def test_validate_openviking_auth_warns_when_server_unavailable(monkeypatch, capsys):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
+            _source="inherited",
             mode="remote",
             api_key_type="user",
             api_key="user-key",
@@ -445,6 +481,32 @@ def test_validate_openviking_auth_warns_when_server_unavailable(monkeypatch, cap
     captured = capsys.readouterr()
     assert "OpenViking server at http://ov.local is unavailable" in captured.err
     assert "Only basic VikingBot features are available" in captured.err
+    assert "user-key" not in captured.err
+
+
+def test_validate_openviking_auth_exits_when_explicit_server_unavailable(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            _source="explicit",
+            mode="remote",
+            api_key_type="user",
+            api_key="user-key",
+            root_api_key="",
+            server_url="http://ov.remote",
+        )
+    )
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(ok=False, error="ConnectError"),
+    )
+
+    with pytest.raises(SystemExit):
+        config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert "configured bot.ov_server.server_url is unavailable" in captured.err
+    assert "OpenViking server URL: http://ov.remote" in captured.err
     assert "user-key" not in captured.err
 
 

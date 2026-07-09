@@ -102,7 +102,7 @@ impl CliContext {
             self.config.effective_actor_peer_id(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
-            self.config.extra_headers.clone(),
+            self.config.effective_extra_headers(),
         )
     }
 }
@@ -367,7 +367,12 @@ enum Commands {
         #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
         /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
-        #[arg(short = 'p', long = "parent-auto-create", value_name = "uri", help_heading = "Skill options")]
+        #[arg(
+            short = 'p',
+            long = "parent-auto-create",
+            value_name = "uri",
+            help_heading = "Skill options"
+        )]
         parent: Option<String>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
@@ -3014,11 +3019,11 @@ async fn main() {
         } => {
             let session_id = session.or_else(|| config::get_or_create_machine_id().ok());
             let endpoint = if let Ok(env_endpoint) = std::env::var("VIKINGBOT_ENDPOINT") {
-                env_endpoint
+                Some(env_endpoint)
             } else if let Ok(config_url) = std::env::var("OPENVIKING_URL") {
-                format!("{}/bot/v1", config_url)
+                Some(format!("{}/bot/v1", config_url))
             } else {
-                format!("{}/bot/v1", ctx.config.url)
+                None
             };
             let api_key = std::env::var("VIKINGBOT_API_KEY").ok();
             let cmd = commands::chat::ChatCommand {
@@ -3026,6 +3031,7 @@ async fn main() {
                 api_key,
                 account: ctx.config.account.clone(),
                 user: ctx.config.user.clone(),
+                actor_peer_id: ctx.config.effective_actor_peer_id(),
                 session: session_id,
                 sender,
                 message,
@@ -3859,9 +3865,10 @@ mod tests {
             .expect("skills remove --yes should parse");
         match remove.command {
             Commands::Skills {
-                action: SkillCommands::Remove {
-                    skills, yes, all, ..
-                },
+                action:
+                    SkillCommands::Remove {
+                        skills, yes, all, ..
+                    },
             } => {
                 assert_eq!(skills, vec!["foo", "bar"]);
                 assert!(yes);
@@ -4274,6 +4281,7 @@ mod tests {
             upload: Default::default(),
             extra_headers: None,
             profile: false,
+            gateway_token: None,
         };
 
         let ctx = CliContext::from_config(
@@ -4313,6 +4321,7 @@ mod tests {
             upload: Default::default(),
             extra_headers: None,
             profile: false,
+            gateway_token: None,
         };
 
         let ctx = CliContext::from_config(
@@ -4350,6 +4359,7 @@ mod tests {
             profile: false,
             upload: Default::default(),
             extra_headers: None,
+            gateway_token: None,
         };
 
         // Without sudo: use api_key

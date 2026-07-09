@@ -177,6 +177,19 @@ def _get_gateway_token(config) -> str:
     return getattr(gateway, "token", "") or ""
 
 
+def _gateway_startup_mode(config, host: str) -> str:
+    ov_server = getattr(config, "ov_server", None)
+    server_url = str(getattr(ov_server, "server_url", "") or "").strip()
+    source_getter = getattr(ov_server, "get_config_source", None)
+    source = source_getter() if callable(source_getter) else getattr(ov_server, "_source", "none")
+    source = str(source or "none").strip().lower()
+    if server_url:
+        if source == "explicit":
+            return "openviking_explicit"
+        return "openviking_inherited"
+    return "standalone_public" if requires_gateway_token(host, "") else "standalone_local"
+
+
 # ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
 # ---------------------------------------------------------------------------
@@ -397,6 +410,7 @@ def gateway(
             file=sys.stderr,
         )
         sys.exit(1)
+    console.print(f"[green]✓[/green] Gateway mode: {_gateway_startup_mode(config, effective_host)}")
     config.gateway.host = effective_host
     config.gateway.port = effective_port
     _abort_if_port_in_use(effective_port, "vikingbot gateway")

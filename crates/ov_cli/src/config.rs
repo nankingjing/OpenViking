@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -6,6 +7,7 @@ use crate::error::{Error, Result};
 const OPENVIKING_CLI_CONFIG_ENV: &str = "OPENVIKING_CLI_CONFIG_FILE";
 pub const DEFAULT_CUSTOM_PORT: &str = "1933";
 pub const DEFAULT_CUSTOM_URL: &str = "http://127.0.0.1:1933";
+pub const GATEWAY_TOKEN_HEADER: &str = "X-Gateway-Token";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadConfig {
@@ -83,7 +85,9 @@ pub struct Config {
         alias = "extra_header",
         skip_serializing_if = "Option::is_none"
     )]
-    pub extra_headers: Option<std::collections::HashMap<String, String>>,
+    pub extra_headers: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +167,7 @@ impl Default for Config {
             profile: false,
             upload: UploadConfig::default(),
             extra_headers: None,
+            gateway_token: None,
         }
     }
 }
@@ -266,6 +271,28 @@ impl Config {
         self.actor_peer_id.clone().or_else(|| self.agent_id.clone())
     }
 
+    pub(crate) fn effective_extra_headers(&self) -> Option<HashMap<String, String>> {
+        let mut headers = self.extra_headers.clone().unwrap_or_default();
+        if let Some(token) = self
+            .gateway_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+        {
+            let has_gateway_header = headers
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case(GATEWAY_TOKEN_HEADER));
+            if !has_gateway_header {
+                headers.insert(GATEWAY_TOKEN_HEADER.to_string(), token.to_string());
+            }
+        }
+        if headers.is_empty() {
+            None
+        } else {
+            Some(headers)
+        }
+    }
+
     fn validate_identity_mode(&self) -> Result<()> {
         if self.actor_peer_id.is_some() && self.agent_id.is_some() {
             return Err(Error::Config(
@@ -340,7 +367,7 @@ pub fn get_or_create_machine_id() -> Result<String> {
 mod tests {
     use crate::error::Error;
 
-    use super::{Config, merge_csv_options};
+    use super::{Config, GATEWAY_TOKEN_HEADER, merge_csv_options};
 
     #[test]
     fn load_required_from_path_reports_missing_cli_config() {
@@ -376,7 +403,8 @@ mod tests {
                 "api_key": "test-key",
                 "account": "acme",
                 "user": "alice",
-                "actor_peer_id": "peer-a"
+                "actor_peer_id": "peer-a",
+                "gateway_token": "gateway-secret"
             }"#,
         )
         .expect("config should deserialize");
@@ -384,6 +412,7 @@ mod tests {
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.user.as_deref(), Some("alice"));
         assert_eq!(config.actor_peer_id.as_deref(), Some("peer-a"));
+        assert_eq!(config.gateway_token.as_deref(), Some("gateway-secret"));
         assert!(config.upload.ignore_dirs.is_none());
         assert!(config.upload.include.is_none());
         assert!(config.upload.exclude.is_none());
@@ -667,5 +696,43 @@ mod tests {
             headers.get("Authorization"),
             Some(&"Bearer token".to_string())
         );
+    }
+
+    #[test]
+    fn effective_extra_headers_adds_gateway_token() {
+        let config = Config {
+            gateway_token: Some("gateway-secret".to_string()),
+            ..Config::default()
+        };
+
+        let headers = config
+            .effective_extra_headers()
+            .expect("gateway header should be present");
+
+        assert_eq!(
+            headers.get(GATEWAY_TOKEN_HEADER).map(String::as_str),
+            Some("gateway-secret")
+        );
+    }
+
+    #[test]
+    fn effective_extra_headers_does_not_override_existing_gateway_header() {
+        let mut extra_headers = std::collections::HashMap::new();
+        extra_headers.insert("x-gateway-token".to_string(), "manual-secret".to_string());
+        let config = Config {
+            extra_headers: Some(extra_headers),
+            gateway_token: Some("gateway-secret".to_string()),
+            ..Config::default()
+        };
+
+        let headers = config
+            .effective_extra_headers()
+            .expect("headers should be present");
+
+        assert_eq!(
+            headers.get("x-gateway-token").map(String::as_str),
+            Some("manual-secret")
+        );
+        assert!(!headers.contains_key(GATEWAY_TOKEN_HEADER));
     }
 }

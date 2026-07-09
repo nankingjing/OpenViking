@@ -13,6 +13,7 @@ def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, m
             {
                 "url": "http://config-host:1933",
                 "api_key": "config-key",
+                "gateway_token": "gateway-secret",
                 "account": "config-account",
                 "user": "config-user",
                 "timeout": 12.5,
@@ -27,6 +28,8 @@ def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, m
 
     assert client._url == "http://config-host:1933"
     assert client._api_key == "config-key"
+    assert client._gateway_token == "gateway-secret"
+    assert client._extra_headers["X-Gateway-Token"] == "gateway-secret"
     assert client._account == "config-account"
     assert client._user_id == "config-user"
     assert client._timeout == 12.5
@@ -104,6 +107,28 @@ def test_async_http_client_reports_invalid_ovcli_config(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="Invalid CLI config"):
         AsyncHTTPClient()
+
+
+def test_async_http_client_does_not_override_explicit_gateway_header(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://config-host:1933",
+                "gateway_token": "gateway-secret",
+                "extra_headers": {"x-gateway-token": "manual-secret"},
+            }
+        )
+    )
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.delenv("OPENVIKING_URL", raising=False)
+
+    client = AsyncHTTPClient()
+
+    assert client._extra_headers["x-gateway-token"] == "manual-secret"
+    assert "X-Gateway-Token" not in client._extra_headers
 
 
 def test_async_http_client_inherits_profile_enabled_from_ovcli_config(tmp_path, monkeypatch):

@@ -89,7 +89,7 @@ pub async fn handle_add_resource(
         ctx.config.effective_actor_peer_id(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
-        ctx.config.extra_headers.clone(),
+        ctx.config.effective_extra_headers(),
     );
     commands::resources::add_resource(
         &client,

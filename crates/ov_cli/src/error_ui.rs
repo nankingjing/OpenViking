@@ -5,7 +5,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     error::Error,
-    error_classifier::{extra_forbidden_field, looks_like_auth_error},
+    error_classifier::{
+        extra_forbidden_field, looks_like_auth_error, looks_like_gateway_dev_boundary_error,
+    },
     i18n::{Language, copy},
     terminal_ui::{fit_to_display_width, truncate_to_display_width},
     theme,
@@ -231,6 +233,32 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
             ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
         ]),
+        Error::Api { message, .. } if looks_like_gateway_dev_boundary_error(message) => {
+            ErrorReport::new(
+                copy(language, "Gateway Safety Check", "Gateway 安全校验失败"),
+                copy(
+                    language,
+                    "OpenViking is in dev mode. VikingBot gateway and OpenViking server must both listen on localhost.",
+                    "OpenViking 当前是 dev 模式，VikingBot gateway 和 OpenViking server 必须都监听 localhost。",
+                ),
+            )
+            .with_command(command)
+            .with_detail(message)
+            .with_actions(vec![
+                ErrorAction::new(
+                    "ov config",
+                    copy(
+                        language,
+                        "Set bot.gateway.host to 127.0.0.1, or configure server.root_api_key",
+                        "将 bot.gateway.host 改为 127.0.0.1，或配置 server.root_api_key",
+                    ),
+                ),
+                ErrorAction::new(
+                    "ov health",
+                    copy(language, "Check the active endpoint", "检查当前端点"),
+                ),
+            ])
+        }
         Error::Api { message, .. } if looks_like_auth_error(message) => ErrorReport::new(
             copy(language, "Authentication Error", "认证错误"),
             copy(language, "OpenViking rejected the API key for the active config.", "OpenViking 拒绝了当前配置的 API Key。"),
@@ -1138,6 +1166,21 @@ Usage: ov config [OPTIONS] [COMMAND]
 
         assert!(verbose.contains("Detail:"));
         assert!(verbose.contains("Request ID"));
+    }
+
+    #[test]
+    fn gateway_dev_boundary_error_is_not_reported_as_api_key_rejection() {
+        let error = Error::api(
+            "Request failed (403 Forbidden): {\"detail\":\"OpenViking server auth_mode changed to dev, but dev auth can only be used when gateway and OpenViking server are localhost\"}"
+                .to_string(),
+        );
+        let report = report_for_runtime_error("ov ls viking://", &error);
+        let normal = strip_ansi(&render_report(&report, false));
+
+        assert!(normal.contains("Gateway Safety Check"));
+        assert!(normal.contains("OpenViking is in dev mode"));
+        assert!(normal.contains("bot.gateway.host"));
+        assert!(!normal.contains("OpenViking rejected the API key"));
     }
 
     #[test]

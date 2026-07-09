@@ -9,6 +9,14 @@ pub(crate) fn looks_like_auth_error(message: &str) -> bool {
             .any(|token| token == "auth")
 }
 
+pub(crate) fn looks_like_gateway_dev_boundary_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("dev auth can only be used when gateway and openviking server are localhost")
+        || (lower.contains("auth_mode changed to dev")
+            && lower.contains("gateway")
+            && lower.contains("openviking server"))
+}
+
 /// Detect the kernel's pydantic `extra="forbid"` rejection — e.g.
 /// "body.tags: Extra inputs are not permitted" — and return the offending field
 /// name. This usually means the target OpenViking instance is on a different
@@ -33,7 +41,9 @@ pub(crate) fn extra_forbidden_field(message: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extra_forbidden_field, looks_like_auth_error};
+    use super::{
+        extra_forbidden_field, looks_like_auth_error, looks_like_gateway_dev_boundary_error,
+    };
 
     #[test]
     fn extracts_extra_forbidden_field() {
@@ -72,6 +82,16 @@ mod tests {
     fn avoids_auth_substring_false_positives() {
         for message in ["author not found", "authority unavailable"] {
             assert!(!looks_like_auth_error(message), "{message}");
+        }
+    }
+
+    #[test]
+    fn detects_gateway_dev_boundary_errors() {
+        for message in [
+            "Request failed (403 Forbidden): {\"detail\":\"OpenViking dev auth can only be used when gateway and OpenViking server are localhost\"}",
+            "Request failed (403 Forbidden): {\"detail\":\"OpenViking server auth_mode changed to dev, but dev auth can only be used when gateway and OpenViking server are localhost\"}",
+        ] {
+            assert!(looks_like_gateway_dev_boundary_error(message), "{message}");
         }
     }
 }

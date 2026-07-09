@@ -62,7 +62,11 @@ pub struct SnapshotRestoreReq {
 
 pub enum SnapshotShowResult {
     Metadata(Value),
-    Blob { oid: String, size: u64, bytes: Vec<u8> },
+    Blob {
+        oid: String,
+        size: u64,
+        bytes: Vec<u8>,
+    },
 }
 
 // ============ HttpClient ============
@@ -1571,8 +1575,11 @@ impl HttpClient {
     }
 
     pub async fn snapshot_ignore_set(&self, content: &str) -> Result<Value> {
-        self.put("/api/v1/snapshot/ignore", &serde_json::json!({ "content": content }))
-            .await
+        self.put(
+            "/api/v1/snapshot/ignore",
+            &serde_json::json!({ "content": content }),
+        )
+        .await
     }
 
     pub async fn snapshot_ignore_delete(&self) -> Result<Value> {
@@ -1583,8 +1590,10 @@ impl HttpClient {
         &self,
         target_ref: &str,
         path: Option<&str>,
-    ) -> Result<SnapshotShowResult> {        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
-        let mut query: Vec<(String, String)> = vec![("target_ref".to_string(), target_ref.to_string())];
+    ) -> Result<SnapshotShowResult> {
+        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
+        let mut query: Vec<(String, String)> =
+            vec![("target_ref".to_string(), target_ref.to_string())];
         if let Some(p) = path {
             query.push(("path".to_string(), p.to_string()));
         }
@@ -1607,7 +1616,10 @@ impl HttpClient {
             .unwrap_or("")
             .to_string();
 
-        if path.is_some() && status.is_success() && content_type.starts_with("application/octet-stream") {
+        if path.is_some()
+            && status.is_success()
+            && content_type.starts_with("application/octet-stream")
+        {
             let oid = response
                 .headers()
                 .get("x-snapshot-oid")

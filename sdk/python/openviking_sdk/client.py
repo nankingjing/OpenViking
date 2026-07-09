@@ -4,6 +4,7 @@ import inspect
 import tempfile
 import uuid
 import zipfile
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
@@ -237,6 +238,7 @@ class AsyncHTTPClient:
         self._account = config.account
         self._user_id = config.user
         self._actor_peer_id = config.actor_peer_id
+        self._gateway_token = config.gateway_token
         self._timeout = config.timeout
         self._extra_headers = config.extra_headers
         self._profile_enabled = config.profile_enabled
@@ -309,6 +311,19 @@ class AsyncHTTPClient:
                 continue
             compacted[key] = value
         return compacted
+
+    @staticmethod
+    def _normalize_context_type(context_type: Optional[Any]) -> Optional[Any]:
+        if context_type is None:
+            return None
+        if isinstance(context_type, list):
+            return [
+                item.value if isinstance(item, Enum) else item
+                for item in context_type
+            ]
+        if isinstance(context_type, Enum):
+            return context_type.value
+        return context_type
 
     def _handle_response_data(self, response: httpx.Response) -> Dict[str, Any]:
         try:
@@ -894,7 +909,7 @@ class AsyncHTTPClient:
             "limit": actual_limit,
             "score_threshold": score_threshold,
             "filter": filter,
-            "context_type": context_type,
+            "context_type": self._normalize_context_type(context_type),
             "tags": tags,
             "telemetry": telemetry,
         }
@@ -925,7 +940,7 @@ class AsyncHTTPClient:
             "limit": actual_limit,
             "score_threshold": score_threshold,
             "filter": filter,
-            "context_type": context_type,
+            "context_type": self._normalize_context_type(context_type),
             "tags": tags,
             "telemetry": telemetry,
         }

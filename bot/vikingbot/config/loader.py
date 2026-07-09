@@ -112,12 +112,20 @@ def load_config() -> Config:
                 _merge_vlm_model_config(bot_data, vlm_data)
 
             bot_server_data = bot_data.get("ov_server", {})
-            ov_server_data = full_data.get("server", {})
-            effective_auth_mode = _merge_ov_server_config(bot_server_data, ov_server_data)
+            server_section_present = "server" in full_data and isinstance(
+                full_data.get("server"), dict
+            )
+            ov_server_data = full_data.get("server", {}) if server_section_present else {}
+            effective_auth_mode, ov_server_source = _merge_ov_server_config(
+                bot_server_data,
+                ov_server_data,
+                server_section_present=server_section_present,
+            )
             bot_data["ov_server"] = bot_server_data
 
             config = Config.model_validate(bot_data)
             config.ov_server.set_effective_auth_mode(effective_auth_mode)
+            config.ov_server.set_config_source(ov_server_source)
 
             return config
         except (json.JSONDecodeError, ValueError) as e:
@@ -158,7 +166,12 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
             agents["extra_headers"] = vlm_data["extra_headers"]
 
 
-def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> str:
+def _merge_ov_server_config(
+    bot_data: dict,
+    ov_data: dict,
+    *,
+    server_section_present: bool,
+) -> tuple[str, str]:
     """
     Merge ov_server config into bot config.
     """
@@ -167,20 +180,29 @@ def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> str:
 
     if configured_server_url:
         return _merge_external_ov_server_config(bot_data, configured_server_url)
+    if not server_section_present:
+        return _merge_no_ov_server_config(bot_data)
 
     return _merge_current_ov_server_config(bot_data, server_data)
 
 
-def _merge_external_ov_server_config(bot_data: dict, server_url: str) -> str:
+def _merge_external_ov_server_config(bot_data: dict, server_url: str) -> tuple[str, str]:
     bot_data["server_url"] = server_url
     bot_data["mode"] = "remote"
     bot_data["api_key_type"] = _normalize_api_key_type(bot_data.get("api_key_type")) or "user"
     if bot_data["api_key_type"] == "user":
         _fill_user_api_key_from_ovcli(bot_data)
-    return _bot_auth_mode_from_api_key_type(bot_data["api_key_type"], "api_key")
+    return _bot_auth_mode_from_api_key_type(bot_data["api_key_type"], "api_key"), "explicit"
 
 
-def _merge_current_ov_server_config(bot_data: dict, server_data: dict) -> str:
+def _merge_no_ov_server_config(bot_data: dict) -> tuple[str, str]:
+    bot_data["server_url"] = str(bot_data.get("server_url") or "").strip()
+    bot_data["mode"] = "local"
+    bot_data["api_key_type"] = _normalize_api_key_type(bot_data.get("api_key_type")) or "user"
+    return "", "none"
+
+
+def _merge_current_ov_server_config(bot_data: dict, server_data: dict) -> tuple[str, str]:
     bot_data["server_url"] = get_server_url_from_server_data(server_data)
 
     server_auth_mode = ServerConfig(
@@ -201,7 +223,7 @@ def _merge_current_ov_server_config(bot_data: dict, server_data: dict) -> str:
     bot_data["mode"] = mode
     if effective_auth_mode == "api_key":
         _fill_user_api_key_from_ovcli(bot_data)
-    return effective_auth_mode
+    return effective_auth_mode, "inherited"
 
 
 def _fill_user_api_key_from_ovcli(bot_data: dict) -> None:
@@ -238,6 +260,16 @@ def _ov_server_auth_mode(ov_server: Any) -> str:
     if api_key_type == "root":
         return "trusted"
     return "api_key"
+
+
+def _ov_server_config_source(ov_server: Any) -> str:
+    getter = getattr(ov_server, "get_config_source", None)
+    if callable(getter):
+        source = getter()
+    else:
+        source = getattr(ov_server, "_source", "none")
+    source = str(source or "none").strip().lower()
+    return source if source in {"explicit", "inherited", "none"} else "none"
 
 
 def _ov_server_trusted_api_key(ov_server: Any) -> str:
@@ -302,6 +334,17 @@ def _server_unavailable_warning(server_url: str, result: _OpenVikingHTTPResult) 
         "OpenViking memory and file tools may not work.",
         file=sys.stderr,
     )
+
+
+def _raise_server_unavailable(server_url: str, result: _OpenVikingHTTPResult) -> None:
+    print(
+        "Error: configured bot.ov_server.server_url is unavailable.\n"
+        f"OpenViking server URL: {server_url}\n"
+        f"Reason: {_result_reason(result)}\n"
+        "Start the configured OpenViking server or update bot.ov_server.server_url.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def _auth_mode_change_hint(actual_auth_mode: str, current_auth_mode: str) -> str:
@@ -434,6 +477,7 @@ def validate_openviking_auth(config: Config) -> None:
     """Validate VikingBot's OpenViking server, auth mode, and API key wiring."""
     ov_server = config.ov_server
     server_url = str(getattr(ov_server, "server_url", "") or "").strip()
+    source = _ov_server_config_source(ov_server)
     if not server_url:
         print(
             "Warning: bot.ov_server.server_url is not configured. Only basic VikingBot "
@@ -453,6 +497,8 @@ def validate_openviking_auth(config: Config) -> None:
 
     health = _request_openviking_json(server_url, "/health", headers=headers)
     if not health.ok:
+        if source == "explicit":
+            _raise_server_unavailable(server_url, health)
         _server_unavailable_warning(server_url, health)
         return
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from difflib import get_close_matches
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,7 @@ class ClientConfig:
     timeout: float
     profile_enabled: bool
     extra_headers: dict[str, str]
+    gateway_token: Optional[str]
     upload_mode: Optional[str]
 
 
@@ -34,6 +36,7 @@ class OVCLIConfig:
     timeout: float
     profile: bool
     extra_headers: dict[str, str]
+    gateway_token: Optional[str]
     upload_mode: Optional[str]
     output: Optional[str]
 
@@ -93,6 +96,28 @@ def _parse_extra_headers(value: object, *, path: str) -> dict[str, str]:
     return parsed
 
 
+def _unknown_field_error(path: str, key: str, allowed_keys: set[str]) -> ValueError:
+    message = f"Unknown field '{path}.{key}'"
+    matches = get_close_matches(key, sorted(allowed_keys), n=1, cutoff=0.6)
+    if matches:
+        message = f"{message}. Did you mean '{path}.{matches[0]}'?"
+    return ValueError(message)
+
+
+def _merge_gateway_token_header(
+    headers: dict[str, str],
+    gateway_token: Optional[str],
+) -> dict[str, str]:
+    merged = dict(headers)
+    token = (gateway_token or "").strip()
+    if not token:
+        return merged
+    has_gateway_header = any(key.lower() == "x-gateway-token" for key in merged)
+    if not has_gateway_header:
+        merged["X-Gateway-Token"] = token
+    return merged
+
+
 def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig]:
     path = Path(config_path).expanduser() if config_path else _resolve_ovcli_config_path()
     if path is None or not path.exists():
@@ -120,10 +145,11 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
             "extra_header",
             "output",
             "root_api_key",
+            "gateway_token",
         }
         unknown_keys = sorted(set(data) - allowed_keys)
         if unknown_keys:
-            raise ValueError(f"Unknown field 'ovcli.{unknown_keys[0]}'")
+            raise _unknown_field_error("ovcli", unknown_keys[0], allowed_keys)
 
         extra_header_alias = data.get("extra_header")
         extra_headers_value = data.get("extra_headers", extra_header_alias)
@@ -135,7 +161,11 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
             allowed_upload_keys = {"mode", "ignore_dirs", "include", "exclude"}
             unknown_upload_keys = sorted(set(upload) - allowed_upload_keys)
             if unknown_upload_keys:
-                raise ValueError(f"Unknown field 'ovcli.upload.{unknown_upload_keys[0]}'")
+                raise _unknown_field_error(
+                    "ovcli.upload",
+                    unknown_upload_keys[0],
+                    allowed_upload_keys,
+                )
             upload_mode = _optional_string(upload.get("mode"), path="ovcli.upload.mode")
 
         actor_peer_id = _optional_string(data.get("actor_peer_id"), path="ovcli.actor_peer_id")
@@ -145,7 +175,6 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
 
         timeout = _optional_float(data.get("timeout"), path="ovcli.timeout")
         profile = _optional_bool(data.get("profile"), path="ovcli.profile")
-
         return OVCLIConfig(
             url=_optional_string(data.get("url"), path="ovcli.url"),
             api_key=_optional_string(data.get("api_key"), path="ovcli.api_key"),
@@ -156,6 +185,9 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
             timeout=60.0 if timeout is None else timeout,
             profile=False if profile is None else profile,
             extra_headers=_parse_extra_headers(extra_headers_value, path="ovcli.extra_headers"),
+            gateway_token=_optional_string(
+                data.get("gateway_token"), path="ovcli.gateway_token"
+            ),
             upload_mode=upload_mode,
             output=_optional_string(data.get("output"), path="ovcli.output"),
         )
@@ -210,6 +242,11 @@ def resolve_client_config(
     resolved_extra_headers = dict(extra_headers) if extra_headers is not None else {}
     if extra_headers is None and cli_config is not None:
         resolved_extra_headers = dict(cli_config.extra_headers)
+    resolved_gateway_token = cli_config.gateway_token if cli_config else None
+    resolved_extra_headers = _merge_gateway_token_header(
+        resolved_extra_headers,
+        resolved_gateway_token,
+    )
 
     resolved_upload_mode = upload_mode
     if resolved_upload_mode is None and cli_config is not None:
@@ -229,5 +266,6 @@ def resolve_client_config(
         timeout=resolved_timeout,
         profile_enabled=resolved_profile_enabled,
         extra_headers=resolved_extra_headers,
+        gateway_token=resolved_gateway_token,
         upload_mode=resolved_upload_mode,
     )

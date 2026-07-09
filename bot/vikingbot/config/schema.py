@@ -546,6 +546,8 @@ class OpenVikingConfig(BaseModel):
 
     _effective_auth_mode: str = PrivateAttr(default="")
 
+    _source: str = PrivateAttr(default="none")
+
     # Deprecated as user config. Kept for compatibility; load_config derives it
     # from OpenViking's effective dev auth mode.
     mode: str = "remote"
@@ -603,6 +605,15 @@ class OpenVikingConfig(BaseModel):
 
     def set_effective_auth_mode(self, auth_mode: str) -> None:
         self._effective_auth_mode = str(auth_mode or "").strip().lower()
+
+    def get_config_source(self) -> str:
+        return self._source
+
+    def set_config_source(self, source: str) -> None:
+        source = str(source or "none").strip().lower()
+        if source not in {"explicit", "inherited", "none"}:
+            source = "none"
+        self._source = source
 
 
 class WebToolsConfig(BaseModel):

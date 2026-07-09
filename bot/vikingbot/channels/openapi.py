@@ -1,14 +1,18 @@
 """OpenAPI channel for HTTP-based chat API."""
 
 import asyncio
+import ipaddress
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
-from fastapi.responses import StreamingResponse
+import httpx
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
@@ -22,6 +26,7 @@ from vikingbot.channels.openapi_models import (
     FeedbackRequest,
     FeedbackResponse,
     HealthResponse,
+    OpenVikingConnection,
     SessionCreateRequest,
     SessionCreateResponse,
     SessionDetailResponse,
@@ -38,6 +43,40 @@ from vikingbot.config.schema import (
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
 from vikingbot.session.manager import SessionManager
+
+
+DEFAULT_OPENVIKING_AGENT_ID = "web-playground"
+DEFAULT_NAMESPACE_POLICY = {
+    "isolate_user_scope_by_agent": False,
+    "isolate_agent_scope_by_user": False,
+}
+OPENVIKING_AUTH_TIMEOUT_SECONDS = 5.0
+OPENVIKING_PROXY_TIMEOUT_SECONDS = 300.0
+HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+
+
+@dataclass(frozen=True)
+class GatewayRequestAuth:
+    """Resolved gateway-level auth facts for one HTTP request."""
+
+    gateway_token_configured: bool
+    gateway_token_valid: bool
+    loopback_request: bool
+    forwarded_connection_trusted: bool = False
+    openviking_connection: dict[str, Any] | None = None
+
+    @property
+    def can_trust_forwarded_connection(self) -> bool:
+        return self.forwarded_connection_trusted
 
 
 class PendingResponse:
@@ -114,6 +153,7 @@ class OpenAPIChannel(BaseChannel):
         # BotChannel configs - key is channel_id
         self._bot_configs: Dict[str, BotChannelConfig] = {}
         self._router: Optional[APIRouter] = None
+        self._gateway_router: Optional[APIRouter] = None
         self._app = app  # External FastAPI app to register routes on
         self._server: Optional[asyncio.Task] = None  # Server task
         self._session_manager = SessionManager(self._resolve_bot_data_path())
@@ -261,6 +301,12 @@ class OpenAPIChannel(BaseChannel):
             self._router = self._create_router()
         return self._router
 
+    def get_gateway_router(self) -> APIRouter:
+        """Get or create root-level gateway routes."""
+        if self._gateway_router is None:
+            self._gateway_router = self._create_gateway_router()
+        return self._gateway_router
+
     def _resolve_bot_data_path(self) -> Path:
         """Resolve the bot data path used for session persistence."""
         if self._global_config is not None and hasattr(self._global_config, "bot_data_path"):
@@ -278,29 +324,12 @@ class OpenAPIChannel(BaseChannel):
         router = APIRouter()
         channel = self  # Capture for closures
 
-        async def verify_api_key(
+        async def verify_gateway_request(
+            http_request: Request,
             x_gateway_token: Optional[str] = Header(None, alias="X-Gateway-Token"),
-        ) -> bool:
-            """Verify API key for privileged HTTP chat/session routes."""
-            gateway_token = ""
-            gateway_host = "127.0.0.1"
-            if channel._global_config is not None:
-                gateway = getattr(channel._global_config, "gateway", None)
-                gateway_host = getattr(gateway, "host", "127.0.0.1") or "127.0.0.1"
-                gateway_token = getattr(gateway, "token", "") or ""
-            if not gateway_token:
-                if requires_gateway_token(gateway_host, gateway_token):
-                    raise HTTPException(
-                        status_code=503,
-                        detail="OpenAPI gateway token is required when host is non-localhost",
-                    )
-                return True
-            if not x_gateway_token:
-                raise HTTPException(status_code=401, detail="X-Gateway-Token header required")
-            # Use secrets.compare_digest for timing-safe comparison
-            if not secrets.compare_digest(x_gateway_token, gateway_token):
-                raise HTTPException(status_code=403, detail="Invalid API key")
-            return True
+        ) -> GatewayRequestAuth:
+            """Verify gateway access and resolve caller OpenViking identity when needed."""
+            return await channel._verify_gateway_request(http_request, x_gateway_token)
 
         @router.get("/health", response_model=HealthResponse)
         async def health_check():
@@ -315,32 +344,36 @@ class OpenAPIChannel(BaseChannel):
         @router.post("/chat", response_model=ChatResponse)
         async def chat(
             request: ChatRequest,
-            authorized: bool = Depends(verify_api_key),
+            http_request: Request,
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
         ):
             """Send a chat message and get a response."""
+            await channel._prepare_chat_request(http_request, request, auth)
             return await channel._handle_chat(request)
 
         @router.post("/chat/stream")
         async def chat_stream(
             request: ChatRequest,
-            authorized: bool = Depends(verify_api_key),
+            http_request: Request,
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
         ):
             """Send a chat message and get a streaming response."""
             if not request.stream:
                 request.stream = True
+            await channel._prepare_chat_request(http_request, request, auth)
             return await channel._handle_chat_stream(request)
 
         @router.post("/feedback", response_model=FeedbackResponse)
         async def submit_feedback(
             request: FeedbackRequest,
-            authorized: bool = Depends(verify_api_key),
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
         ):
             """Submit explicit user feedback for a prior assistant response."""
             return await channel._handle_feedback(request)
 
         @router.get("/sessions", response_model=SessionListResponse)
         async def list_sessions(
-            authorized: bool = Depends(verify_api_key),
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
         ):
             """List all sessions."""
             sessions = []
@@ -358,7 +391,7 @@ class OpenAPIChannel(BaseChannel):
         @router.post("/sessions", response_model=SessionCreateResponse)
         async def create_session(
             request: SessionCreateRequest,
-            authorized: bool = Depends(verify_api_key),
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
         ):
             """Create a new session."""
             session_id = str(uuid.uuid4())
@@ -375,7 +408,7 @@ class OpenAPIChannel(BaseChannel):
         @router.get("/sessions/{session_id}", response_model=SessionDetailResponse)
         async def get_session(
             session_id: str,
-            authorized: bool = Depends(verify_api_key),
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
         ):
             """Get session details."""
             if session_id not in channel._sessions:
@@ -395,7 +428,7 @@ class OpenAPIChannel(BaseChannel):
         @router.delete("/sessions/{session_id}")
         async def delete_session(
             session_id: str,
-            authorized: bool = Depends(verify_api_key),
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
         ):
             """Delete a session."""
             if session_id not in channel._sessions:
@@ -409,7 +442,8 @@ class OpenAPIChannel(BaseChannel):
         @router.post("/chat/channel", response_model=ChatResponse)
         async def chat_channel(
             request: ChatRequest,
-            authorized: bool = Depends(verify_api_key),
+            http_request: Request,
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
         ):
             """Send a chat message to a specific bot channel and get a response."""
             channel_id = request.channel_id
@@ -418,12 +452,14 @@ class OpenAPIChannel(BaseChannel):
             if channel_id not in channel._bot_configs:
                 raise HTTPException(status_code=404, detail=f"Channel '{channel_id}' not found")
 
+            await channel._prepare_chat_request(http_request, request, auth)
             return await channel._handle_bot_chat(channel_id, request)
 
         @router.post("/chat/channel/stream")
         async def chat_channel_stream(
             request: ChatRequest,
-            authorized: bool = Depends(verify_api_key),
+            http_request: Request,
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
         ):
             """Send a chat message to a specific bot channel and get a streaming response."""
             channel_id = request.channel_id
@@ -434,9 +470,506 @@ class OpenAPIChannel(BaseChannel):
 
             if not request.stream:
                 request.stream = True
+            await channel._prepare_chat_request(http_request, request, auth)
             return await channel._handle_bot_chat_stream(channel_id, request)
 
         return router
+
+    def _create_gateway_router(self) -> APIRouter:
+        """Create root-level gateway routes for health and OpenViking proxy."""
+        router = APIRouter()
+        channel = self
+
+        async def verify_gateway_request(
+            http_request: Request,
+            x_gateway_token: Optional[str] = Header(None, alias="X-Gateway-Token"),
+        ) -> GatewayRequestAuth:
+            return await channel._verify_gateway_request(http_request, x_gateway_token)
+
+        @router.get("/health")
+        async def gateway_health(http_request: Request):
+            return await channel._gateway_health(http_request)
+
+        @router.api_route(
+            "/api/v1/{path:path}",
+            methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        )
+        async def proxy_openviking_api(
+            path: str,
+            http_request: Request,
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
+        ):
+            return await channel._proxy_openviking_request(http_request, path)
+
+        return router
+
+    def _gateway_host(self) -> str:
+        gateway = getattr(self._global_config, "gateway", None) if self._global_config else None
+        return str(getattr(gateway, "host", "127.0.0.1") or "127.0.0.1").strip()
+
+    def _gateway_token(self) -> str:
+        gateway = getattr(self._global_config, "gateway", None) if self._global_config else None
+        return str(getattr(gateway, "token", "") or "").strip()
+
+    def _ov_server_config(self) -> Any | None:
+        if self._global_config is None:
+            return None
+        return getattr(self._global_config, "ov_server", None)
+
+    def _ov_server_url(self) -> str:
+        ov_server = self._ov_server_config()
+        return str(getattr(ov_server, "server_url", "") or "").strip().rstrip("/")
+
+    def _ov_server_auth_mode(self) -> str:
+        ov_server = self._ov_server_config()
+        if ov_server is None or not self._ov_server_url():
+            return ""
+        effective = str(getattr(ov_server, "effective_auth_mode", "") or "").strip().lower()
+        if effective in {"api_key", "trusted", "dev"}:
+            return effective
+        api_key_type = str(getattr(ov_server, "api_key_type", "") or "").strip().lower()
+        if api_key_type == "root":
+            return "trusted"
+        return "api_key"
+
+    @staticmethod
+    def _is_loopback_host(host: str) -> bool:
+        host = str(host or "").strip().lower()
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    @classmethod
+    def _is_loopback_url(cls, url: str) -> bool:
+        try:
+            host = urlsplit(url).hostname or ""
+        except ValueError:
+            return False
+        return cls._is_loopback_host(host)
+
+    @classmethod
+    def _is_loopback_request(cls, request: Request) -> bool:
+        client = getattr(request, "client", None)
+        return cls._is_loopback_host(getattr(client, "host", "") or "")
+
+    def _is_gateway_localhost(self) -> bool:
+        return self._is_loopback_host(self._gateway_host())
+
+    def _is_safe_dev_boundary(self) -> bool:
+        return self._is_gateway_localhost() and self._is_loopback_url(self._ov_server_url())
+
+    @staticmethod
+    def _has_openviking_auth_headers(request: Request) -> bool:
+        return bool(
+            request.headers.get("X-API-Key")
+            or request.headers.get("x-api-key")
+            or request.headers.get("Authorization")
+            or request.headers.get("authorization")
+        )
+
+    @staticmethod
+    def _extract_api_key(request: Request) -> str:
+        api_key = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+        if api_key:
+            return api_key.strip()
+        authorization = request.headers.get("Authorization") or request.headers.get(
+            "authorization"
+        )
+        if authorization and authorization.lower().startswith("bearer "):
+            return authorization[7:].strip()
+        return ""
+
+    @staticmethod
+    def _identity_headers_from_request(request: Request) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        for name in (
+            "X-API-Key",
+            "Authorization",
+            "X-OpenViking-Account",
+            "X-OpenViking-User",
+            "X-OpenViking-Actor-Peer",
+        ):
+            value = request.headers.get(name)
+            if value:
+                headers[name] = value
+        return headers
+
+    async def _request_upstream_health_with_headers(
+        self,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        server_url = self._ov_server_url()
+        if not server_url:
+            raise HTTPException(status_code=503, detail="OpenViking upstream is not configured")
+        try:
+            async with httpx.AsyncClient(
+                timeout=OPENVIKING_AUTH_TIMEOUT_SECONDS,
+                trust_env=False,
+            ) as client:
+                response = await client.get(
+                    f"{server_url}/health",
+                    headers=headers or {},
+                )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenViking upstream health check failed: {exc.__class__.__name__}",
+            ) from exc
+
+        if response.status_code in {401, 403}:
+            raise HTTPException(status_code=401, detail="Invalid OpenViking credentials")
+        if not 200 <= response.status_code < 300:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenViking upstream health check failed: HTTP {response.status_code}",
+            )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="OpenViking upstream health check returned non-JSON response",
+            ) from exc
+        if not isinstance(data, dict):
+            raise HTTPException(
+                status_code=502,
+                detail="OpenViking upstream health check returned invalid response",
+            )
+        return data
+
+    async def _request_upstream_health(self, request: Request) -> dict[str, Any]:
+        return await self._request_upstream_health_with_headers(
+            self._identity_headers_from_request(request)
+        )
+
+    def _upstream_auth_mode_probe_headers(self, request: Request) -> dict[str, str]:
+        headers = self._identity_headers_from_request(request)
+        ov_server = self._ov_server_config()
+        configured_api_key = str(getattr(ov_server, "api_key", "") or "").strip()
+        if configured_api_key:
+            headers["X-API-Key"] = configured_api_key
+        if self._ov_server_auth_mode() == "trusted":
+            account_id = str(
+                headers.get("X-OpenViking-Account")
+                or getattr(ov_server, "account_id", "")
+                or "default"
+            ).strip()
+            user_id = str(
+                headers.get("X-OpenViking-User")
+                or getattr(ov_server, "admin_user_id", "")
+                or "default"
+            ).strip()
+            headers["X-OpenViking-Account"] = account_id
+            headers["X-OpenViking-User"] = user_id
+        return headers
+
+    async def _assert_runtime_upstream_auth_mode(self, request: Request) -> None:
+        expected_auth_mode = self._ov_server_auth_mode()
+        if not expected_auth_mode:
+            return
+
+        health = await self._request_upstream_health_with_headers(
+            self._upstream_auth_mode_probe_headers(request)
+        )
+        actual_auth_mode = str(health.get("auth_mode") or "").strip().lower()
+        if not actual_auth_mode:
+            return
+
+        if actual_auth_mode == "dev" and not self._is_safe_dev_boundary():
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "OpenViking server auth_mode changed to dev, but dev auth can only "
+                    "be used when gateway and OpenViking server are localhost"
+                ),
+            )
+        if actual_auth_mode != expected_auth_mode:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "OpenViking server auth_mode changed after gateway startup: "
+                    f"gateway expects {expected_auth_mode}, server reports {actual_auth_mode}. "
+                    "Restart VikingBot gateway or update ov.conf."
+                ),
+            )
+
+    def _build_openviking_connection(
+        self,
+        *,
+        api_key: str = "",
+        account_id: str = "",
+        user_id: str = "",
+        role: str = "",
+        api_key_type: str = "user",
+        actor_peer_id: str = "",
+    ) -> dict[str, Any]:
+        connection: dict[str, Any] = {
+            "account_id": account_id,
+            "user_id": user_id,
+            "agent_id": DEFAULT_OPENVIKING_AGENT_ID,
+            "role": role,
+            "api_key_type": api_key_type,
+            "server_url": self._ov_server_url(),
+            "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
+        }
+        if api_key:
+            connection["api_key"] = api_key
+        if actor_peer_id:
+            connection["actor_peer_id"] = actor_peer_id
+        return {key: value for key, value in connection.items() if value not in ("", None)}
+
+    async def _resolve_api_key_connection(self, request: Request) -> dict[str, Any]:
+        health = await self._request_upstream_health(request)
+        role = str(health.get("role") or "").strip().lower()
+        account_id = str(health.get("account_id") or "").strip()
+        user_id = str(health.get("user_id") or "").strip()
+        if role not in {"user", "admin", "root"} or not account_id or not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="OpenViking credentials did not resolve to a usable identity",
+            )
+        api_key_type = "root" if role == "root" else "user"
+        return self._build_openviking_connection(
+            api_key=self._extract_api_key(request),
+            account_id=account_id,
+            user_id=user_id,
+            role=role,
+            api_key_type=api_key_type,
+            actor_peer_id=request.headers.get("X-OpenViking-Actor-Peer", ""),
+        )
+
+    def _resolve_trusted_connection(self, request: Request) -> dict[str, Any] | None:
+        if not self._ov_server_url():
+            return None
+        ov_server = self._ov_server_config()
+        account_id = (
+            request.headers.get("X-OpenViking-Account")
+            or getattr(ov_server, "account_id", "")
+            or "default"
+        )
+        user_id = (
+            request.headers.get("X-OpenViking-User")
+            or getattr(ov_server, "admin_user_id", "")
+            or "default"
+        )
+        return self._build_openviking_connection(
+            api_key=str(getattr(ov_server, "api_key", "") or "").strip(),
+            account_id=str(account_id).strip(),
+            user_id=str(user_id).strip(),
+            role="user",
+            api_key_type="root",
+            actor_peer_id=request.headers.get("X-OpenViking-Actor-Peer", ""),
+        )
+
+    async def _verify_gateway_request(
+        self,
+        request: Request,
+        x_gateway_token: Optional[str],
+    ) -> GatewayRequestAuth:
+        gateway_host = self._gateway_host()
+        gateway_token = self._gateway_token()
+        token_configured = bool(gateway_token)
+        token_valid = False
+
+        if token_configured and x_gateway_token:
+            token_valid = secrets.compare_digest(x_gateway_token, gateway_token)
+            if not token_valid:
+                raise HTTPException(status_code=403, detail="Invalid X-Gateway-Token")
+
+        loopback_request = self._is_loopback_request(request)
+        local_forward_trust = (
+            loopback_request and not token_configured and self._is_gateway_localhost()
+        )
+        forwarded_trusted = loopback_request and (token_valid or local_forward_trust)
+
+        server_url = self._ov_server_url()
+        auth_mode = self._ov_server_auth_mode()
+
+        if not server_url:
+            if token_configured and not token_valid:
+                raise HTTPException(status_code=401, detail="X-Gateway-Token header required")
+            if requires_gateway_token(gateway_host, gateway_token) and not token_valid:
+                status_code = 401 if token_configured else 503
+                detail = (
+                    "X-Gateway-Token header required"
+                    if token_configured
+                    else "OpenAPI gateway token is required when host is non-localhost"
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            return GatewayRequestAuth(
+                gateway_token_configured=token_configured,
+                gateway_token_valid=token_valid,
+                loopback_request=loopback_request,
+                forwarded_connection_trusted=forwarded_trusted,
+            )
+
+        if auth_mode == "dev":
+            if not self._is_safe_dev_boundary():
+                raise HTTPException(
+                    status_code=403,
+                    detail="OpenViking dev auth can only be used when gateway and OpenViking server are localhost",
+                )
+            return GatewayRequestAuth(
+                gateway_token_configured=token_configured,
+                gateway_token_valid=token_valid,
+                loopback_request=loopback_request,
+                forwarded_connection_trusted=forwarded_trusted,
+            )
+
+        if auth_mode == "trusted":
+            if not self._is_gateway_localhost() and not token_valid:
+                status_code = 401 if token_configured else 503
+                detail = (
+                    "X-Gateway-Token header required"
+                    if token_configured
+                    else "OpenAPI gateway token is required for non-localhost trusted gateway"
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            await self._assert_runtime_upstream_auth_mode(request)
+            return GatewayRequestAuth(
+                gateway_token_configured=token_configured,
+                gateway_token_valid=token_valid,
+                loopback_request=loopback_request,
+                forwarded_connection_trusted=forwarded_trusted,
+            )
+
+        if auth_mode == "api_key":
+            connection = None
+            if self._has_openviking_auth_headers(request):
+                await self._assert_runtime_upstream_auth_mode(request)
+                connection = await self._resolve_api_key_connection(request)
+            elif not self._is_gateway_localhost() and not token_valid:
+                raise HTTPException(
+                    status_code=401,
+                    detail="OpenViking API key or X-Gateway-Token header required",
+                )
+            return GatewayRequestAuth(
+                gateway_token_configured=token_configured,
+                gateway_token_valid=token_valid,
+                loopback_request=loopback_request,
+                forwarded_connection_trusted=forwarded_trusted,
+                openviking_connection=connection,
+            )
+
+        raise HTTPException(
+            status_code=503,
+            detail=f"Unsupported OpenViking auth mode for gateway: {auth_mode or 'unknown'}",
+        )
+
+    async def _prepare_chat_request(
+        self,
+        http_request: Request,
+        chat_request: ChatRequest,
+        auth: GatewayRequestAuth,
+    ) -> None:
+        if chat_request.openviking_connection is not None:
+            if not auth.can_trust_forwarded_connection:
+                raise HTTPException(
+                    status_code=403,
+                    detail="openviking_connection is only accepted from trusted server proxy",
+                )
+            await self._assert_runtime_upstream_auth_mode(http_request)
+            return
+
+        connection = auth.openviking_connection
+        auth_mode = self._ov_server_auth_mode()
+        if connection is None and auth_mode == "api_key":
+            raise HTTPException(status_code=401, detail="OpenViking API key header required")
+        if connection is None and auth_mode == "trusted":
+            connection = self._resolve_trusted_connection(http_request)
+
+        if connection:
+            chat_request.openviking_connection = OpenVikingConnection(**connection)
+
+    async def _gateway_health(self, request: Request) -> dict[str, Any]:
+        from vikingbot import __version__
+
+        server_url = self._ov_server_url()
+        auth_mode = self._ov_server_auth_mode()
+        payload: dict[str, Any] = {
+            "status": "ok" if self._running else "unhealthy",
+            "healthy": self._running,
+            "version": __version__,
+            "gateway": "vikingbot",
+            "upstream_configured": bool(server_url),
+        }
+        if auth_mode:
+            payload["auth_mode"] = auth_mode
+        if server_url:
+            payload["upstream_url"] = server_url
+            try:
+                health = await self._request_upstream_health(request)
+                payload["upstream_status"] = health.get("status", "ok")
+                for key in ("account_id", "user_id", "role"):
+                    if key in health:
+                        payload[key] = health[key]
+            except HTTPException as exc:
+                payload["upstream_status"] = "unavailable"
+                payload["upstream_error"] = exc.detail
+        return payload
+
+    @staticmethod
+    def _proxy_request_headers(request: Request) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        for key, value in request.headers.items():
+            lower = key.lower()
+            if lower in HOP_BY_HOP_HEADERS:
+                continue
+            if lower in {"host", "content-length", "x-gateway-token"}:
+                continue
+            headers[key] = value
+        return headers
+
+    @staticmethod
+    def _proxy_response_headers(headers: httpx.Headers) -> dict[str, str]:
+        forwarded: dict[str, str] = {}
+        for key, value in headers.items():
+            lower = key.lower()
+            if lower in HOP_BY_HOP_HEADERS:
+                continue
+            if lower in {"content-length", "content-encoding", "transfer-encoding"}:
+                continue
+            forwarded[key] = value
+        return forwarded
+
+    async def _proxy_openviking_request(self, request: Request, path: str) -> Response:
+        server_url = self._ov_server_url()
+        if not server_url:
+            raise HTTPException(status_code=503, detail="OpenViking upstream is not configured")
+        await self._assert_runtime_upstream_auth_mode(request)
+
+        upstream_url = f"{server_url}/api/v1/{path}"
+        if request.url.query:
+            upstream_url = f"{upstream_url}?{request.url.query}"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=OPENVIKING_PROXY_TIMEOUT_SECONDS,
+                trust_env=False,
+            ) as client:
+                upstream_response = await client.request(
+                    request.method,
+                    upstream_url,
+                    content=await request.body(),
+                    headers=self._proxy_request_headers(request),
+                )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenViking upstream proxy request failed: {exc.__class__.__name__}",
+            ) from exc
+
+        return Response(
+            content=upstream_response.content,
+            status_code=upstream_response.status_code,
+            headers=self._proxy_response_headers(upstream_response.headers),
+            media_type=upstream_response.headers.get("content-type"),
+        )
 
     def _setup_routes(self) -> None:
         """Setup routes on the external FastAPI app."""
@@ -448,7 +981,8 @@ class OpenAPIChannel(BaseChannel):
         # Note: openviking-server adds its own /bot/v1 prefix when proxying
         router = self.get_router()
         self._app.include_router(router, prefix="/bot/v1")
-        logger.info("OpenAPI routes registered at root path")
+        self._app.include_router(self.get_gateway_router())
+        logger.info("OpenAPI routes registered at /bot/v1 and gateway root")
 
     def _request_user_id(self, request: ChatRequest) -> str:
         if request.user_id:
