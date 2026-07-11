@@ -58,6 +58,7 @@ class CronService:
         self._store: CronStore | None = None
         self._timer_task: asyncio.Task | None = None
         self._running = False
+        self._executing = False
 
     def _load_store(self) -> CronStore:
         """Load jobs from disk."""
@@ -192,6 +193,8 @@ class CronService:
 
     def _arm_timer(self) -> None:
         """Schedule the next timer tick."""
+        if self._executing:
+            return  # tick is running jobs; it will re-arm after
         if self._timer_task:
             self._timer_task.cancel()
 
@@ -221,11 +224,14 @@ class CronService:
             if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
         ]
 
-        for job in due_jobs:
-            await self._execute_job(job)
-
-        self._save_store()
-        self._arm_timer()
+        self._executing = True
+        try:
+            for job in due_jobs:
+                await self._execute_job(job)
+            self._save_store()
+        finally:
+            self._executing = False
+            self._arm_timer()
 
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job."""
