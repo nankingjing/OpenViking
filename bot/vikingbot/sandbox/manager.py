@@ -41,6 +41,7 @@ class SandboxManager:
     async def _create_sandbox(self, workspace_id: str) -> SandboxBackend:
         """Create new sandbox instance."""
         workspace = self.workspace / workspace_id
+        workspace_existed = workspace.exists()
         instance = self._backend_cls(self.config.sandbox, workspace_id, workspace)
         try:
             await instance.start()
@@ -48,7 +49,7 @@ class SandboxManager:
             import traceback
 
             traceback.print_exc()
-        if not workspace.exists():
+        if not workspace_existed:
             await self._copy_bootstrap_files(workspace)
         return instance
 
