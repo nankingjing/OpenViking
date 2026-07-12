@@ -3,6 +3,8 @@
 
 """Tests for content write wait-tracker lock ordering."""
 
+import asyncio
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
@@ -69,4 +71,79 @@ async def test_direct_write_registers_wait_tracker_before_lock_and_cleans_on_bus
         )
 
     assert lock_manager.released is True
+    assert telemetry_id not in tracker._states
+
+async def _run_direct_write(coordinator, ctx, telemetry_id):
+    return await coordinator._write_direct_with_refresh(
+        uri="viking://resources/doc.md",
+        root_uri="viking://resources/doc.md",
+        content="updated",
+        mode="replace",
+        context_type="resource",
+        wait=True,
+        timeout=0.1,
+        ctx=ctx,
+        written_bytes=7,
+        telemetry_id=telemetry_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_direct_write_cleans_wait_tracker_when_lock_acquisition_raises(monkeypatch):
+    telemetry_id = "telemetry-acquire-error"
+
+    class _FailingLockManager:
+        def create_handle(self):
+            return _FakeHandle()
+
+        async def acquire_exact_path(self, handle, lock_path):
+            del handle, lock_path
+            raise RuntimeError("acquire failed")
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager",
+        lambda: _FailingLockManager(),
+    )
+    tracker = get_request_wait_tracker()
+    tracker.cleanup(telemetry_id)
+    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+    ctx = RequestContext(user=UserIdentifier("acc", "alice"), role=Role.USER)
+
+    with pytest.raises(RuntimeError, match="acquire failed"):
+        await _run_direct_write(coordinator, ctx, telemetry_id)
+
+    assert telemetry_id not in tracker._states
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("release_error", [RuntimeError("release failed"), asyncio.CancelledError()])
+async def test_direct_write_busy_cleans_tracker_and_preserves_busy_error(
+    monkeypatch, release_error
+):
+    telemetry_id = "telemetry-busy-release-error"
+
+    class _FailingReleaseLockManager:
+        def create_handle(self):
+            return _FakeHandle()
+
+        async def acquire_exact_path(self, handle, lock_path):
+            del handle, lock_path
+            return False
+
+        async def release(self, handle):
+            del handle
+            raise release_error
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager",
+        lambda: _FailingReleaseLockManager(),
+    )
+    tracker = get_request_wait_tracker()
+    tracker.cleanup(telemetry_id)
+    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+    ctx = RequestContext(user=UserIdentifier("acc", "alice"), role=Role.USER)
+
+    with pytest.raises(ResourceBusyError):
+        await _run_direct_write(coordinator, ctx, telemetry_id)
+
     assert telemetry_id not in tracker._states

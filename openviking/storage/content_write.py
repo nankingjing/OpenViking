@@ -252,74 +252,76 @@ class ContentWriteCoordinator:
             get_request_wait_tracker().register_request(telemetry_id)
             request_registered = True
 
-        lock_manager = get_lock_manager()
-        handle = lock_manager.create_handle()
-        lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
-        acquired = await lock_manager.acquire_exact_path(handle, lock_path)
-        if not acquired:
-            await lock_manager.release(handle)
-            if request_registered:
-                get_request_wait_tracker().cleanup(telemetry_id)
-            raise ResourceBusyError(
-                f"resource is busy and cannot be written now: {uri}",
-                uri=uri,
-            )
-
-        previous_content: Optional[str] = None
-        content_written = False
-        semantic_enqueued = False
-        lock_released = False
+        handle: Any = None
+        acquired = False
         try:
-            if mode != "create":
-                previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
-            await self._write_in_place(
-                uri,
-                content,
-                mode=mode,
-                ctx=ctx,
-                lock_handle=handle,
-            )
-            content_written = True
-            await self._enqueue_semantic_refresh(
-                root_uri=root_uri,
-                changed_uri=uri,
-                context_type=context_type,
-                ctx=ctx,
-                change_type="added" if mode == "create" else "modified",
-            )
-            semantic_enqueued = True
-            await lock_manager.release(handle)
-            lock_released = True
-            queue_status = (
-                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
-                if wait
-                else None
-            )
-            return self._build_write_result(
-                uri=uri,
-                root_uri=root_uri,
-                context_type=context_type,
-                mode=mode,
-                written_bytes=written_bytes,
-                wait=wait,
-                queue_status=queue_status,
-            )
-        except Exception:
-            if not semantic_enqueued and content_written:
-                await self._rollback_direct_write(
-                    uri=uri,
-                    previous_content=previous_content,
+            lock_manager = get_lock_manager()
+            handle = lock_manager.create_handle()
+            lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+            acquired = await lock_manager.acquire_exact_path(handle, lock_path)
+            if not acquired:
+                try:
+                    await lock_manager.release(handle)
+                finally:
+                    raise ResourceBusyError(
+                        f"resource is busy and cannot be written now: {uri}",
+                        uri=uri,
+                    )
+
+            previous_content: Optional[str] = None
+            content_written = False
+            semantic_enqueued = False
+            lock_released = False
+            try:
+                if mode != "create":
+                    previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
+                await self._write_in_place(
+                    uri,
+                    content,
                     mode=mode,
                     ctx=ctx,
                     lock_handle=handle,
                 )
-            if not lock_released:
+                content_written = True
+                await self._enqueue_semantic_refresh(
+                    root_uri=root_uri,
+                    changed_uri=uri,
+                    context_type=context_type,
+                    ctx=ctx,
+                    change_type="added" if mode == "create" else "modified",
+                )
+                semantic_enqueued = True
                 await lock_manager.release(handle)
-            raise
+                lock_released = True
+                queue_status = (
+                    await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                    if wait
+                    else None
+                )
+                return self._build_write_result(
+                    uri=uri,
+                    root_uri=root_uri,
+                    context_type=context_type,
+                    mode=mode,
+                    written_bytes=written_bytes,
+                    wait=wait,
+                    queue_status=queue_status,
+                )
+            except Exception:
+                if not semantic_enqueued and content_written:
+                    await self._rollback_direct_write(
+                        uri=uri,
+                        previous_content=previous_content,
+                        mode=mode,
+                        ctx=ctx,
+                        lock_handle=handle,
+                    )
+                if acquired and not lock_released:
+                    await lock_manager.release(handle)
+                raise
         finally:
             if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
-
     async def _rollback_direct_write(
         self,
         *,
