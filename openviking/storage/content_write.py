@@ -655,7 +655,7 @@ class ContentWriteCoordinator:
             )
         except Exception:
             if not released:
-                await release_lock(lock_manager, handle)
+                await lock_manager.release(handle)
             raise
         finally:
             if request_registered:
