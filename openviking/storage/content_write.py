@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -252,6 +253,17 @@ class ContentWriteCoordinator:
             get_request_wait_tracker().register_request(telemetry_id)
             request_registered = True
 
+        async def release_lock(lock_manager: Any, handle: Any) -> None:
+            release_task = asyncio.create_task(lock_manager.release(handle))
+            try:
+                await asyncio.shield(release_task)
+            except asyncio.CancelledError:
+                try:
+                    await asyncio.shield(release_task)
+                except BaseException:
+                    logger.error("Failed to release direct write lock", exc_info=True)
+                raise
+
         handle: Any = None
         acquired = False
         try:
@@ -261,7 +273,7 @@ class ContentWriteCoordinator:
             acquired = await lock_manager.acquire_exact_path(handle, lock_path)
             if not acquired:
                 try:
-                    await lock_manager.release(handle)
+                    await release_lock(lock_manager, handle)
                 finally:
                     raise ResourceBusyError(
                         f"resource is busy and cannot be written now: {uri}",
@@ -291,8 +303,8 @@ class ContentWriteCoordinator:
                     change_type="added" if mode == "create" else "modified",
                 )
                 semantic_enqueued = True
-                await lock_manager.release(handle)
                 lock_released = True
+                await release_lock(lock_manager, handle)
                 queue_status = (
                     await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
                     if wait
@@ -307,7 +319,7 @@ class ContentWriteCoordinator:
                     wait=wait,
                     queue_status=queue_status,
                 )
-            except Exception:
+            except BaseException:
                 if not semantic_enqueued and content_written:
                     await self._rollback_direct_write(
                         uri=uri,
@@ -317,11 +329,15 @@ class ContentWriteCoordinator:
                         lock_handle=handle,
                     )
                 if acquired and not lock_released:
-                    await lock_manager.release(handle)
+                    try:
+                        await release_lock(lock_manager, handle)
+                    except BaseException:
+                        logger.error("Failed to release direct write lock", exc_info=True)
                 raise
         finally:
             if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
+
     async def _rollback_direct_write(
         self,
         *,
@@ -639,7 +655,7 @@ class ContentWriteCoordinator:
             )
         except Exception:
             if not released:
-                await lock_manager.release(handle)
+                await release_lock(lock_manager, handle)
             raise
         finally:
             if request_registered:
