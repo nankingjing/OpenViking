@@ -147,3 +147,117 @@ async def test_direct_write_busy_cleans_tracker_and_preserves_busy_error(
         await _run_direct_write(coordinator, ctx, telemetry_id)
 
     assert telemetry_id not in tracker._states
+
+@pytest.mark.asyncio
+async def test_direct_write_cancellation_after_acquire_releases_lock(monkeypatch):
+    telemetry_id = "telemetry-cancel-after-acquire"
+
+    class _LockManager:
+        def __init__(self):
+            self.release_count = 0
+
+        def create_handle(self):
+            return _FakeHandle()
+
+        async def acquire_exact_path(self, handle, lock_path):
+            del handle, lock_path
+            return True
+
+        async def release(self, handle):
+            del handle
+            self.release_count += 1
+
+    lock_manager = _LockManager()
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager", lambda: lock_manager
+    )
+    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+
+    async def cancel_write(*args, **kwargs):
+        del args, kwargs
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(coordinator, "_write_in_place", cancel_write)
+    ctx = RequestContext(user=UserIdentifier("acc", "alice"), role=Role.USER)
+    tracker = get_request_wait_tracker()
+    tracker.cleanup(telemetry_id)
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator._write_direct_with_refresh(
+            uri="viking://resources/doc.md",
+            root_uri="viking://resources/doc.md",
+            content="updated",
+            mode="create",
+            context_type="resource",
+            wait=True,
+            timeout=0.1,
+            ctx=ctx,
+            written_bytes=7,
+            telemetry_id=telemetry_id,
+        )
+
+    assert lock_manager.release_count == 1
+    assert telemetry_id not in tracker._states
+
+
+@pytest.mark.asyncio
+async def test_direct_write_cancellation_during_release_finishes_release(monkeypatch):
+    telemetry_id = "telemetry-cancel-during-release"
+    release_started = asyncio.Event()
+    release_allowed = asyncio.Event()
+
+    class _LockManager:
+        def __init__(self):
+            self.release_count = 0
+
+        def create_handle(self):
+            return _FakeHandle()
+
+        async def acquire_exact_path(self, handle, lock_path):
+            del handle, lock_path
+            return True
+
+        async def release(self, handle):
+            del handle
+            self.release_count += 1
+            release_started.set()
+            await release_allowed.wait()
+
+    lock_manager = _LockManager()
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager", lambda: lock_manager
+    )
+    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+
+    async def no_op(*args, **kwargs):
+        del args, kwargs
+
+    monkeypatch.setattr(coordinator, "_write_in_place", no_op)
+    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", no_op)
+    ctx = RequestContext(user=UserIdentifier("acc", "alice"), role=Role.USER)
+    tracker = get_request_wait_tracker()
+    tracker.cleanup(telemetry_id)
+
+    task = asyncio.create_task(
+        coordinator._write_direct_with_refresh(
+            uri="viking://resources/doc.md",
+            root_uri="viking://resources/doc.md",
+            content="updated",
+            mode="create",
+            context_type="resource",
+            wait=True,
+            timeout=0.1,
+            ctx=ctx,
+            written_bytes=7,
+            telemetry_id=telemetry_id,
+        )
+    )
+    await release_started.wait()
+    task.cancel()
+    release_allowed.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert lock_manager.release_count == 1
+    assert telemetry_id not in tracker._states
