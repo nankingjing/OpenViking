@@ -116,6 +116,9 @@ class _BatchRefreshOutcome:
         return semantic_status, vector_status
 
 
+_REQUEST_WAIT_DEFAULT_TIMEOUT_SECONDS = 300.0
+
+
 class ContentWriteCoordinator:
     """Write a file (create or modify) and trigger downstream maintenance."""
 
@@ -839,10 +842,22 @@ class ContentWriteCoordinator:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         ingest_options: IngestOptions | None = None,
     ) -> Dict[str, Any]:
+        request_registered = False
+        if wait and telemetry_id:
+            # Register the wait state before the path lock is requested so a
+            # queue completion belonging to this request cannot land while the
+            # write is still contending for the lock.
+            get_request_wait_tracker().register_request(telemetry_id)
+            request_registered = True
+
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         try:
             lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
         except LockAcquisitionError as exc:
+            # Contention hands out no lease; drop the registration before
+            # reporting the resource as busy.
+            if request_registered:
+                get_request_wait_tracker().cleanup(telemetry_id)
             raise ResourceBusyError(
                 f"resource is busy and cannot be written now: {uri}",
                 uri=uri,
@@ -869,8 +884,6 @@ class ContentWriteCoordinator:
                 and processing_mode != VECTORS_ONLY
             ):
                 file_abstract = (await self._load_file_abstracts([uri], ctx=ctx)).get(uri, "")
-            if wait and telemetry_id:
-                get_request_wait_tracker().register_request(telemetry_id)
             written_content = await self._write_in_place(
                 uri,
                 content,
@@ -976,7 +989,7 @@ class ContentWriteCoordinator:
                 await self._viking_fs._async_agfs.pathlock_release(lease)
             raise
         finally:
-            if wait and telemetry_id:
+            if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
     async def _rollback_direct_write(
@@ -1325,10 +1338,18 @@ class ContentWriteCoordinator:
         if not telemetry_id:
             return await self._wait_for_queues(timeout=timeout)
         tracker = get_request_wait_tracker()
+        wait_timeout = timeout
+        if wait_timeout is None:
+            wait_timeout = _REQUEST_WAIT_DEFAULT_TIMEOUT_SECONDS
+            logger.warning(
+                "No request wait timeout provided for telemetry_id=%s; using %.1fs max wait",
+                telemetry_id,
+                wait_timeout,
+            )
         try:
-            await tracker.wait_for_request(telemetry_id, timeout=timeout)
+            await tracker.wait_for_request(telemetry_id, timeout=wait_timeout)
         except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", timeout) from exc
+            raise DeadlineExceededError("queue processing", wait_timeout) from exc
         return tracker.build_queue_status(telemetry_id)
 
     async def _write_memory_with_refresh(
