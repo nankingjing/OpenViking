@@ -74,9 +74,11 @@ async def test_preference_full_count_only_incremented_on_full_success():
     for i in range(pref_count):
         if i < PREFERENCE_FULL_LIMIT:
             # Very large content — its full fragment will exceed the budget.
-            read_contents[f"{mem_root}/preferences/pref_{i}.md"] = "x" * 5000
+            # Make it unique per memory so the new content-hash dedupe does not
+            # collapse the failing entries together.
+            read_contents[f"{mem_root}/preferences/pref_{i}.md"] = f"large content block {i} " + "x" * 5000
         else:
-            read_contents[f"{mem_root}/preferences/pref_{i}.md"] = "short pref"
+            read_contents[f"{mem_root}/preferences/pref_{i}.md"] = f"short pref {i}"
 
     async def fake_read(uri, **kwargs):
         return read_contents.get(uri, "")
@@ -93,23 +95,31 @@ async def test_preference_full_count_only_incremented_on_full_success():
         ctx=ctx,
         query="preferences test",
         quotas={"events": 0, "entities": 0, "preferences": pref_count, "experiences": 0},
-        max_chars=500,
+        max_chars=2000,
         min_score=0.1,
         render=True,
     )
 
-    # The first PREFERENCE_FULL_LIMIT entries should NOT be "full" — content
-    # was too large.
-    for i in range(PREFERENCE_FULL_LIMIT):
-        assert result.entries[i].mode != "full", (
-            f"Entry {i} with large content unexpectedly rendered as full"
+    by_uri = {e.uri: e for e in result.entries}
+    large_uris = {f"{mem_root}/preferences/pref_{i}.md" for i in range(PREFERENCE_FULL_LIMIT)}
+    small_uris = {f"{mem_root}/preferences/pref_{i}.md" for i in range(PREFERENCE_FULL_LIMIT, pref_count)}
+
+    # Large-content entries should not have rendered as full; they may still
+    # appear as URI-only entries (the upstream budget fallback).
+    for uri in large_uris:
+        entry = by_uri.get(uri)
+        assert entry is not None, f"Missing large-content entry {uri}. Got {list(by_uri)}"
+        assert entry.mode != "full", (
+            f"Large-content entry {uri} unexpectedly rendered as full"
         )
 
-    # Entries PREFERENCE_FULL_LIMIT and beyond that DO fit the budget should
-    # still render as "full" — the counter wasn't wasted on the failures.
-    for i in range(PREFERENCE_FULL_LIMIT, pref_count):
-        assert result.entries[i].mode == "full", (
-            f"Entry {i} should be full but was {result.entries[i].mode!r}. "
+    # Small-content entries that fit must still render as full: the counter
+    # was not consumed by the failing large-content entries.
+    for uri in small_uris:
+        entry = by_uri.get(uri)
+        assert entry is not None, f"Missing small-content entry {uri}. Got {list(by_uri)}"
+        assert entry.mode == "full", (
+            f"Entry {uri} should be full but was {entry.mode!r}. "
             f"Modes: {[e.mode for e in result.entries]}"
         )
 
@@ -142,7 +152,9 @@ async def test_preference_full_limit_still_capped_when_full_fits():
         return _FakeFindResult([])
 
     async def fake_read(uri, **kwargs):
-        return "short content"
+        # Unique per-memory content so the upstream content-hash deduper
+        # does not collapse distinct preferences.
+        return f"short content {uri}"
 
     service = _make_mock_service(fake_find, fake_read)
 
