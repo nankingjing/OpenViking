@@ -385,8 +385,11 @@ class OpenVikingPostCallHook(Hook):
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
         if tool_name == "read_file":
-            # Guard: result must be a non-empty string before running regex.
-            if isinstance(result, str) and result and not isinstance(result, Exception):
+            # Only inspect non-empty string results. Tool failures reach this hook
+            # as Exception instances (the registry stores the raised exception as
+            # the result), and re.search would raise TypeError on non-str values —
+            # which, on the sync hook path, would escalate into a tool-call failure.
+            if isinstance(result, str) and result:
                 match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
