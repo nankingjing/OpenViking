@@ -169,6 +169,7 @@ class CronService:
     def stop(self) -> None:
         """Stop the cron service."""
         self._running = False
+        self._executing = False
         if self._timer_task:
             self._timer_task.cancel()
             self._timer_task = None
@@ -192,9 +193,16 @@ class CronService:
         return min(times) if times else None
 
     def _arm_timer(self) -> None:
-        """Schedule the next timer tick."""
+        """Schedule the next timer tick.
+
+        Does nothing when a tick is currently executing jobs
+        (_executing is True), because cancelling the timer task would
+        interrupt the in-flight job execution.  The executing tick
+        re-arms the timer in its own finally block once all jobs
+        have completed.
+        """
         if self._executing:
-            return  # tick is running jobs; it will re-arm after
+            return
         if self._timer_task:
             self._timer_task.cancel()
 
@@ -213,9 +221,18 @@ class CronService:
         self._timer_task = asyncio.create_task(tick())
 
     async def _on_timer(self) -> None:
-        """Handle timer tick - run due jobs."""
+        """Handle timer tick -- run every job that is now due.
+
+        Sets _executing = True so that external callers (add_job,
+        remove_job, enable_job, etc.) do not cancel the timer task
+        while we are still executing.  Re-arms the timer in the
+        ``finally`` block once all due jobs have been processed.
+        """
         if not self._store:
             return
+
+        if self._executing:
+            return  # re-entrancy guard: a tick is already in progress
 
         now = _now_ms()
         due_jobs = [
