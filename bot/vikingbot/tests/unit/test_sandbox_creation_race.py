@@ -8,6 +8,8 @@ single backend instance; without the creation lock both callers pass the
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from vikingbot.sandbox.manager import SandboxManager
 
 
@@ -78,8 +80,8 @@ async def test_concurrent_create_and_cleanup_does_not_deadlock():
             manager.cleanup_session(None),
         )
 
-    # Sanity: no exception means no deadlock
-    assert True
+    # No hang, and the lock coalesced each cycle into exactly one creation.
+    assert create_count == 20
 
 
 async def test_lock_released_after_create_is_cancelled():
@@ -114,3 +116,89 @@ async def test_lock_released_after_create_is_cancelled():
     assert result is not None
     assert attempt >= 2  # second attempt succeeded
     assert manager._sandboxes == {"shared": result}
+
+
+async def test_cancelled_start_stops_partial_backend(tmp_path):
+    """Exercise the real _create_sandbox cancellation path: if the task is
+    cancelled while instance.start() is pending, the partially-created
+    backend must be stopped, CancelledError must propagate, nothing may be
+    cached, and the creation lock must be released."""
+    manager = _make_manager()
+    manager.workspace = tmp_path
+    events = []
+
+    class _FakeBackend:
+        def __init__(self, sandbox_config, workspace_id, workspace):
+            self.workspace_id = workspace_id
+
+        async def start(self):
+            events.append("start")
+            await asyncio.Event().wait()  # block until cancelled
+
+        async def stop(self):
+            events.append("stop")
+
+    manager._backend_cls = _FakeBackend
+
+    task = asyncio.create_task(manager.get_sandbox(None))
+    for _ in range(100):
+        if "start" in events:
+            break
+        await asyncio.sleep(0.01)
+    assert "start" in events
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert events == ["start", "stop"]
+    assert manager._sandboxes == {}
+    assert not manager._creation_lock.locked()
+
+
+async def test_concurrent_cleanup_session_stops_once():
+    """Two concurrent cleanup_session calls for the same key must stop the
+    backend exactly once and must not raise KeyError: the entry is popped
+    from the cache before the (awaitable) stop() call."""
+    manager = _make_manager()
+    stop_count = 0
+
+    async def _stop():
+        nonlocal stop_count
+        stop_count += 1
+        await asyncio.sleep(0.02)  # keep the stop pending so the calls interleave
+
+    manager._sandboxes["shared"] = SimpleNamespace(stop=_stop)
+
+    await asyncio.gather(
+        manager.cleanup_session(None),
+        manager.cleanup_session(None),
+    )
+
+    assert stop_count == 1
+    assert manager._sandboxes == {}
+
+
+async def test_cleanup_all_with_creation_interleaved():
+    """cleanup_all pops entries one at a time, so a creation that lands while
+    a stop() is awaited is also cleaned up instead of crashing iteration."""
+    manager = _make_manager()
+    stopped = []
+
+    def _backend(name):
+        async def _stop():
+            stopped.append(name)
+            await asyncio.sleep(0.01)
+        return SimpleNamespace(stop=_stop)
+
+    manager._sandboxes["a"] = _backend("a")
+    manager._sandboxes["b"] = _backend("b")
+
+    async def _add_during_cleanup():
+        await asyncio.sleep(0.005)  # land while the first stop() is pending
+        manager._sandboxes["c"] = _backend("c")
+
+    await asyncio.gather(manager.cleanup_all(), _add_during_cleanup())
+
+    assert sorted(stopped) == ["a", "b", "c"]
+    assert manager._sandboxes == {}

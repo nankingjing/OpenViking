@@ -130,19 +130,26 @@ class SandboxManager:
         """Clean up sandbox for a session.
 
         Does **not** acquire ``_creation_lock`` so it cannot deadlock with
-        ``get_sandbox``.  The lock is only needed for creation serialisation;
-        eviction / teardown is safe to interleave.
+        ``get_sandbox``.  The entry is popped from the cache *before* the
+        (awaitable) ``stop()`` call so that a concurrent ``cleanup_session``
+        for the same key is a no-op instead of stopping the backend twice
+        and raising ``KeyError`` on the second delete.
         """
         workspace_id = self.to_workspace_id(session_key)
-        if workspace_id in self._sandboxes:
-            await self._sandboxes[workspace_id].stop()
-            del self._sandboxes[workspace_id]
+        sandbox = self._sandboxes.pop(workspace_id, None)
+        if sandbox is not None:
+            await sandbox.stop()
 
     async def cleanup_all(self) -> None:
-        """Clean up all sandboxes."""
-        for sandbox in self._sandboxes.values():
+        """Clean up all sandboxes.
+
+        Entries are popped one at a time so the dict is never mutated while
+        being iterated (``stop()`` is an await point where creations or other
+        cleanups may interleave); anything added mid-cleanup is torn down too.
+        """
+        while self._sandboxes:
+            _, sandbox = self._sandboxes.popitem()
             await sandbox.stop()
-        self._sandboxes.clear()
 
     def get_workspace_path(self, session_key: SessionKey) -> Path:
         return self.workspace / self.to_workspace_id(session_key)
