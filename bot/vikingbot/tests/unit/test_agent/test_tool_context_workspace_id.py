@@ -46,3 +46,13 @@ def test_explicit_workspace_id_is_preserved():
 
     assert ctx.workspace_id == "explicit-id"
     assert manager.calls == []
+
+
+def test_workspace_id_stays_none_when_session_key_missing():
+    """workspace_id remains None when sandbox_manager is present but session_key is None."""
+    manager = _FakeSandboxManager("should-not-be-used")
+
+    ctx = ToolContext(session_key=None, sandbox_manager=manager)
+
+    assert ctx.workspace_id is None
+    assert manager.calls == []
