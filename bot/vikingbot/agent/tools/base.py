@@ -20,8 +20,11 @@ class ToolContext:
             'channel:chat_id'.
         sandbox_manager: Optional manager for sandbox operations like file access and
             command execution. If provided, tools can perform sandboxed operations.
-        workspace_id: Computed workspace identifier derived from the sandbox_manager
-            and session_key. This determines the sandbox directory for the session.
+        workspace_id: Workspace identifier for the session's sandbox directory.
+            Computed per-instance in __post_init__ from the instance's
+            sandbox_manager and session_key. An explicitly-passed value takes
+            precedence and prevents automatic derivation.  Set to None when
+            no sandbox manager is available.
         sender_id: Optional identifier for the message sender, used for tracking
             and permission checks.
         actor_peer_id: Authenticated OpenViking peer identity for memory and file tools.
