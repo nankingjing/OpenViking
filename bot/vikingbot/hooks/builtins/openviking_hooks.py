@@ -256,10 +256,12 @@ class OpenVikingCompactHook(Hook):
 
 class OpenVikingPostCallHook(Hook):
     name = "openviking_post_call"
-    # Hook execute() is genuinely async (it awaits ov_client search/read), but it
-    # MUST return its mutated kwargs dict to the caller so result transformations
-    # (like experience injection) reach tool.post_call.  Route it through the sync
-    # path so the hook manager threads the return value back into kwargs.
+    # is_sync=True routes through the HookManager sync path, where each hook's
+    # return value is threaded back into kwargs:
+    #     `kwargs = await hook.execute(context, **kwargs)`
+    # The default is_sync=False routes through asyncio.gather, which discards
+    # return values — the enriched {tool_name, params, result} dict would be
+    # silently dropped.
     is_sync = True
 
     async def _get_client(self, workspace_id: str, config: Any = None) -> VikingClient:
@@ -383,7 +385,8 @@ class OpenVikingPostCallHook(Hook):
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
         if tool_name == "read_file":
-            if result and not isinstance(result, Exception):
+            # Guard: result must be a non-empty string before running regex.
+            if isinstance(result, str) and result and not isinstance(result, Exception):
                 match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
