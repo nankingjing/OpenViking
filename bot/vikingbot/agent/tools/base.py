@@ -23,8 +23,8 @@ class ToolContext:
         workspace_id: Workspace identifier for the session's sandbox directory.
             Computed per-instance in __post_init__ from the instance's
             sandbox_manager and session_key. An explicitly-passed value takes
-            precedence and prevents automatic derivation.  Set to None when
-            no sandbox manager is available.
+            precedence and prevents automatic derivation. Remains None when
+            either sandbox_manager or session_key is missing.
         sender_id: Optional identifier for the message sender, used for tracking
             and permission checks.
         actor_peer_id: Authenticated OpenViking peer identity for memory and file tools.
@@ -58,7 +58,11 @@ class ToolContext:
     channel_metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
-        if self.workspace_id is None and self.sandbox_manager is not None and self.session_key is not None:
+        if (
+            self.workspace_id is None
+            and self.sandbox_manager is not None
+            and self.session_key is not None
+        ):
             self.workspace_id = self.sandbox_manager.to_workspace_id(self.session_key)
         if self.memory_owner_user_ids is None and self.memory_user_ids is not None:
             self.memory_owner_user_ids = self.memory_user_ids
