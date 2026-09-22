@@ -1,7 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for content write wait-tracker lock ordering."""
+"""Tests for content write wait-tracker lock ordering.
+
+The direct-write path takes its exact-path lock through the VikingFS path-lock
+lease API (``_async_agfs.pathlock_acquire_exact`` / ``pathlock_release``);
+``_FakeAGFS`` stands in for that client.
+"""
 
 import asyncio
 
@@ -9,51 +14,61 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
-from openviking.storage.errors import ResourceBusyError
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.session.user_id import UserIdentifier
 
 
+class _FakeAGFS:
+    """Minimal stand-in for the AGFS path-lock lease client."""
+
+    def __init__(self, *, acquire_error=None, release_error=None, on_acquire=None, on_release=None):
+        self.acquire_error = acquire_error
+        self.release_error = release_error
+        self.on_acquire = on_acquire
+        self.on_release = on_release
+        self.acquired_paths = []
+        self.released_leases = []
+        self.release_count = 0
+
+    async def pathlock_acquire_exact(self, path):
+        self.acquired_paths.append(path)
+        if self.on_acquire is not None:
+            await self.on_acquire()
+        if self.acquire_error is not None:
+            raise self.acquire_error
+        return {"path": path, "token": "lease-1"}
+
+    async def pathlock_release(self, lease):
+        self.released_leases.append(lease)
+        self.release_count += 1
+        if self.on_release is not None:
+            await self.on_release()
+        if self.release_error is not None:
+            raise self.release_error
+
+
 class _FakeVikingFS:
+    def __init__(self, agfs):
+        self._async_agfs = agfs
+
     def _uri_to_path(self, uri, ctx=None):
         del ctx
         return f"/fake/{uri.replace('://', '/')}"
 
 
-class _FakeHandle:
-    id = "handle-1"
-    locks = []
-
-
-class _AssertingLockManager:
-    def __init__(self, telemetry_id: str):
-        self.telemetry_id = telemetry_id
-        self.released = False
-
-    def create_handle(self):
-        return _FakeHandle()
-
-    async def acquire_exact_path(self, handle, lock_path):
-        del handle, lock_path
-        assert self.telemetry_id in get_request_wait_tracker()._states
-        return False
-
-    async def release(self, handle):
-        del handle
-        self.released = True
-
-
 @pytest.mark.asyncio
-async def test_direct_write_registers_wait_tracker_before_lock_and_cleans_on_busy(monkeypatch):
+async def test_direct_write_registers_wait_tracker_before_lock_and_cleans_on_busy():
     telemetry_id = "telemetry-before-lock"
-    lock_manager = _AssertingLockManager(telemetry_id)
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager",
-        lambda: lock_manager,
-    )
+    registered_during_acquire = []
+
+    async def on_acquire():
+        registered_during_acquire.append(telemetry_id in get_request_wait_tracker()._states)
+
+    agfs = _FakeAGFS(acquire_error=LockAcquisitionError("busy"), on_acquire=on_acquire)
     tracker = get_request_wait_tracker()
     tracker.cleanup(telemetry_id)
-    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+    coordinator = ContentWriteCoordinator(_FakeVikingFS(agfs))
     ctx = RequestContext(user=UserIdentifier("acc", "alice"), role=Role.USER)
 
     with pytest.raises(ResourceBusyError):
@@ -70,8 +85,12 @@ async def test_direct_write_registers_wait_tracker_before_lock_and_cleans_on_bus
             telemetry_id=telemetry_id,
         )
 
-    assert lock_manager.released is True
+    assert registered_during_acquire == [True]
+    assert agfs.acquired_paths == ["/fake/viking/resources/doc.md"]
+    # A failed acquisition holds no lease, so nothing may be released.
+    assert agfs.release_count == 0
     assert telemetry_id not in tracker._states
+
 
 async def _run_direct_write(coordinator, ctx, telemetry_id):
     return await coordinator._write_direct_with_refresh(
@@ -89,89 +108,46 @@ async def _run_direct_write(coordinator, ctx, telemetry_id):
 
 
 @pytest.mark.asyncio
-async def test_direct_write_cleans_wait_tracker_when_lock_acquisition_raises(monkeypatch):
+async def test_direct_write_cleans_wait_tracker_when_lock_acquisition_raises():
     telemetry_id = "telemetry-acquire-error"
-
-    class _FailingLockManager:
-        def create_handle(self):
-            return _FakeHandle()
-
-        async def acquire_exact_path(self, handle, lock_path):
-            del handle, lock_path
-            raise RuntimeError("acquire failed")
-
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager",
-        lambda: _FailingLockManager(),
-    )
+    agfs = _FakeAGFS(acquire_error=RuntimeError("acquire failed"))
     tracker = get_request_wait_tracker()
     tracker.cleanup(telemetry_id)
-    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+    coordinator = ContentWriteCoordinator(_FakeVikingFS(agfs))
     ctx = RequestContext(user=UserIdentifier("acc", "alice"), role=Role.USER)
 
     with pytest.raises(RuntimeError, match="acquire failed"):
         await _run_direct_write(coordinator, ctx, telemetry_id)
 
+    assert agfs.release_count == 0
     assert telemetry_id not in tracker._states
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("release_error", [RuntimeError("release failed"), asyncio.CancelledError()])
-async def test_direct_write_busy_cleans_tracker_and_preserves_busy_error(
-    monkeypatch, release_error
-):
+async def test_direct_write_busy_cleans_tracker_and_preserves_busy_error(release_error):
     telemetry_id = "telemetry-busy-release-error"
-
-    class _FailingReleaseLockManager:
-        def create_handle(self):
-            return _FakeHandle()
-
-        async def acquire_exact_path(self, handle, lock_path):
-            del handle, lock_path
-            return False
-
-        async def release(self, handle):
-            del handle
-            raise release_error
-
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager",
-        lambda: _FailingReleaseLockManager(),
+    agfs = _FakeAGFS(
+        acquire_error=LockAcquisitionError("busy"),
+        release_error=release_error,
     )
     tracker = get_request_wait_tracker()
     tracker.cleanup(telemetry_id)
-    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+    coordinator = ContentWriteCoordinator(_FakeVikingFS(agfs))
     ctx = RequestContext(user=UserIdentifier("acc", "alice"), role=Role.USER)
 
     with pytest.raises(ResourceBusyError):
         await _run_direct_write(coordinator, ctx, telemetry_id)
 
+    assert agfs.release_count == 0
     assert telemetry_id not in tracker._states
+
 
 @pytest.mark.asyncio
 async def test_direct_write_cancellation_after_acquire_releases_lock(monkeypatch):
     telemetry_id = "telemetry-cancel-after-acquire"
-
-    class _LockManager:
-        def __init__(self):
-            self.release_count = 0
-
-        def create_handle(self):
-            return _FakeHandle()
-
-        async def acquire_exact_path(self, handle, lock_path):
-            del handle, lock_path
-            return True
-
-        async def release(self, handle):
-            del handle
-            self.release_count += 1
-
-    lock_manager = _LockManager()
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager", lambda: lock_manager
-    )
-    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+    agfs = _FakeAGFS()
+    coordinator = ContentWriteCoordinator(_FakeVikingFS(agfs))
 
     async def cancel_write(*args, **kwargs):
         del args, kwargs
@@ -196,7 +172,7 @@ async def test_direct_write_cancellation_after_acquire_releases_lock(monkeypatch
             telemetry_id=telemetry_id,
         )
 
-    assert lock_manager.release_count == 1
+    assert agfs.release_count == 1
     assert telemetry_id not in tracker._states
 
 
@@ -206,28 +182,12 @@ async def test_direct_write_cancellation_during_release_finishes_release(monkeyp
     release_started = asyncio.Event()
     release_allowed = asyncio.Event()
 
-    class _LockManager:
-        def __init__(self):
-            self.release_count = 0
+    async def on_release():
+        release_started.set()
+        await release_allowed.wait()
 
-        def create_handle(self):
-            return _FakeHandle()
-
-        async def acquire_exact_path(self, handle, lock_path):
-            del handle, lock_path
-            return True
-
-        async def release(self, handle):
-            del handle
-            self.release_count += 1
-            release_started.set()
-            await release_allowed.wait()
-
-    lock_manager = _LockManager()
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager", lambda: lock_manager
-    )
-    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+    agfs = _FakeAGFS(on_release=on_release)
+    coordinator = ContentWriteCoordinator(_FakeVikingFS(agfs))
 
     async def no_op(*args, **kwargs):
         del args, kwargs
@@ -259,8 +219,9 @@ async def test_direct_write_cancellation_during_release_finishes_release(monkeyp
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert lock_manager.release_count == 1
+    assert agfs.release_count == 1
     assert telemetry_id not in tracker._states
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -274,27 +235,8 @@ async def test_direct_write_rollback_failure_preserves_primary_and_releases_lock
     monkeypatch, primary_error, rollback_error
 ):
     telemetry_id = "telemetry-rollback-cleanup-failure"
-
-    class _LockManager:
-        def __init__(self):
-            self.release_count = 0
-
-        def create_handle(self):
-            return _FakeHandle()
-
-        async def acquire_exact_path(self, handle, lock_path):
-            del handle, lock_path
-            return True
-
-        async def release(self, handle):
-            del handle
-            self.release_count += 1
-
-    lock_manager = _LockManager()
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_lock_manager", lambda: lock_manager
-    )
-    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+    agfs = _FakeAGFS()
+    coordinator = ContentWriteCoordinator(_FakeVikingFS(agfs))
 
     async def no_op(*args, **kwargs):
         del args, kwargs
@@ -328,5 +270,5 @@ async def test_direct_write_rollback_failure_preserves_primary_and_releases_lock
             telemetry_id=telemetry_id,
         )
 
-    assert lock_manager.release_count == 1
+    assert agfs.release_count == 1
     assert telemetry_id not in tracker._states

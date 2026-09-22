@@ -10,7 +10,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
-from openviking.service.task_tracker import TaskTracker, reset_task_tracker, set_task_tracker
+from openviking.service.task_tracker import TaskTracker, set_task_tracker
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -42,7 +42,6 @@ class _FakeSkillProcessor:
 
 @pytest.mark.asyncio
 async def test_add_skill_tracks_queue_monitor_task(monkeypatch):
-    reset_task_tracker()
     set_task_tracker(TaskTracker(_MemoryTaskStore()))
     monitor_started = asyncio.Event()
     release_monitor = asyncio.Event()
@@ -74,4 +73,4 @@ async def test_add_skill_tracks_queue_monitor_task(monkeypatch):
     await service.close_background_tasks()
 
     assert not service._background_tasks
-    reset_task_tracker()
+    set_task_tracker(None)
