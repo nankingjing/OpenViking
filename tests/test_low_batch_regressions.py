@@ -191,18 +191,18 @@ def _extract_machine_id_function():
     raise AssertionError("get_or_create_machine_id not found in commands.py")
 
 
-def test_get_or_create_machine_id_uses_unique_fallback():
-    """The fallback path must not return the literal 'default' string."""
+def test_get_or_create_machine_id_fallback_is_stable():
+    """The fallback must be stable: callers use it as the default session id.
+
+    A per-call value (e.g. ``default-<uuid>``) would start a fresh session on
+    every invocation, so the fallback has to stay a constant.
+    """
     import ast
 
     func = _extract_machine_id_function()
     src = ast.unparse(func)
-    assert "default-" in src, "fallback should be a unique prefix like 'default-<uuid>'"
-    assert '"default"' not in src and "'default'" not in src, (
-        "fallback must not return the literal string 'default' (it would collide "
-        "across concurrent installs)"
-    )
-    assert "uuid" in src, "fallback should use uuid.uuid4 for uniqueness"
+    assert "uuid" not in src, "fallback must not vary per call; it seeds the session id"
+    assert "default" in src
 
 
 def test_get_or_create_machine_id_logs_failure():
@@ -229,67 +229,3 @@ def test_get_or_create_machine_id_logs_failure():
         "the broad `except Exception` branch should call logger.warning so "
         "operators can diagnose missing-machineid issues"
     )
-
-
-def test_get_or_create_machine_id_runtime_unique_fallback_v2():
-    """Runtime check: simulate missing machineid and confirm uniqueness.
-
-    bot.vikingbot.cli.commands pulls in many heavy optional deps at module
-    import time. To avoid that, we extract just the function via AST and exec
-    it in an isolated namespace with a fake `from machineid import machine_id`
-    raising ImportError on entry.
-    """
-    import ast
-
-    commands_path = (
-        Path(__file__).resolve().parent.parent / "bot" / "vikingbot" / "cli" / "commands.py"
-    )
-    tree = ast.parse(commands_path.read_text(encoding="utf-8"))
-    func_node = next(
-        n
-        for n in tree.body
-        if isinstance(n, ast.FunctionDef) and n.name == "get_or_create_machine_id"
-    )
-    func_src = ast.unparse(func_node)
-
-    # Stub `from machineid import machine_id` so the inner import raises.
-    setup = (
-        "import builtins as _b\n"
-        "_real = _b.__import__\n"
-        "def _stub(name, globals=None, locals=None, fromlist=(), level=0):\n"
-        "    if name == 'machineid':\n"
-        "        raise ImportError('simulated missing dependency')\n"
-        "    return _real(name, globals, locals, fromlist, level)\n"
-        "_b.__import__ = _stub\n"
-        # loguru.logger used inside the except branch needs a no-op stub.
-        "class _Logger:\n"
-        "    def warning(self, *a, **k):\n"
-        "        return None\n"
-        "    def info(self, *a, **k):\n"
-        "        return None\n"
-        "    def debug(self, *a, **k):\n"
-        "        return None\n"
-        "    def error(self, *a, **k):\n"
-        "        return None\n"
-        "logger = _Logger()\n"
-    )
-
-    # Stub loguru.logger so warning() does not blow up.
-    restore = "_b.__import__ = _real\n"
-
-    import uuid as _uuid_mod
-
-    ns = {"_stub": None, "uuid": _uuid_mod}
-    try:
-        exec(setup + func_src + "\n" + restore, ns)
-        a = ns["get_or_create_machine_id"]()
-        b = ns["get_or_create_machine_id"]()
-    except Exception:
-        # Ensure import is restored even on failure.
-        raise
-
-    assert a != "default"
-    assert b != "default"
-    assert a != b
-    assert a.startswith("default-")
-    assert b.startswith("default-")
