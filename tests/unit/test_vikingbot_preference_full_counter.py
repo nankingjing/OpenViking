@@ -20,11 +20,21 @@ These are standalone unit tests of ``MemoryStore._parse_viking_memory`` — no
 server fixtures, config file, or network access required.
 """
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from vikingbot.agent.memory import (
+
+# ``vikingbot`` lives under ``bot/`` and is not installed in the repo-wide test
+# environment, so make it importable when this file is collected by a root
+# ``pytest`` run.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for _path in (_REPO_ROOT, _REPO_ROOT / "bot"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+from vikingbot.agent.memory import (  # noqa: E402
     _TYPE_QUOTA_EVENT_CHAR_RATIO,
     _TYPE_QUOTA_PREFERENCE_FULL_LIMIT,
     MemoryStore,
